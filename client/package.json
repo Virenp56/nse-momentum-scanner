@@ -1,8 +1,20 @@
 {
   "name": "nse-momentum-dashboard",
   "version": "1.0.0",
+  "private": true,
   "type": "module",
-  "scripts": { "dev": "vite", "build": "vite", "preview": "vite preview" },
-  "dependencies": { "@vitejs/plugin-react": "latest", "axios": "^1.8.4", "vite": "latest", "react": "latest", "react-dom": "latest" },
-  "devDependencies": {}
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "axios": "^1.8.4",
+    "react": "latest",
+    "react-dom": "latest"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "latest",
+    "vite": "latest"
+  }
 }
