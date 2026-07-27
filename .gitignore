@@ -1,0 +1,5 @@
+node_modules/
+dist/
+.env
+server/data/today.json
+server/data/history.json
