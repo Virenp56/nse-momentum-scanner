@@ -9,7 +9,7 @@ import { buildRecommendations } from './recommendations.js';
 const app = express();
 app.use(cors({ origin: process.env.CLIENT_ORIGIN?.split(',') || '*'}));
 app.use(express.json());
-const scanTimes = ['09:30', '09:45', '10:00', '10:15'];
+const scanTimes = ['09:25', '09:35', '09:45', '09:55', '10:05', '10:15', '10:25'];
 let scanning = false;
 const indiaTime = () => new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date());
 
@@ -23,7 +23,7 @@ async function runScan(forcedTime) {
     const [gainers, losers] = await Promise.all([fetchGainers(), fetchLosers()]);
     day.scans.push({ time, timestamp: new Date().toISOString(), gainers, losers });
     day.scans.sort((a, b) => a.time.localeCompare(b.time));
-    if (time === '10:15' || day.scans.length === 4) day.recommendations = buildRecommendations(day.scans);
+    if (time === '10:25' || scanTimes.every((scheduledTime) => day.scans.some((scan) => scan.time === scheduledTime))) day.recommendations = buildRecommendations(day.scans);
     await saveToday(day);
     return day;
   } finally { scanning = false; }

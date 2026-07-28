@@ -20,7 +20,7 @@ The API runs on port `4000`. NSE calls are made only by the server, which establ
 
 ## Scheduled scans
 
-Weekdays in the `Asia/Kolkata` timezone: 09:30, 09:45, 10:00, and 10:15. A time is saved once only, even if cron is triggered more than once. Use **Manual scan** for testing or an ad-hoc capture.
+Weekdays in the `Asia/Kolkata` timezone: 09:25, 09:35, 09:45, 09:55, 10:05, 10:15, and 10:25. A time is saved once only, even if cron is triggered more than once. Final recommendations are generated after the 10:25 scan. Use **Manual scan** for testing or an ad-hoc capture.
 
 ## Deployment
 
