@@ -1,15 +1,12 @@
 import { chromium } from "playwright-extra";
 import stealthPlugin from "puppeteer-extra-plugin-stealth";
 
-// Attach stealth plugin to trick anti-bot systems
 chromium.use(stealthPlugin());
 
 let browser;
-let context;
-let page;
 
-async function getPage() {
-  if (page && !page.isClosed()) return page;
+async function getBrowser() {
+  if (browser && browser.isConnected()) return browser;
 
   browser = await chromium.launch({
     headless: true,
@@ -17,58 +14,62 @@ async function getPage() {
       "--disable-blink-features=AutomationControlled",
       "--no-sandbox",
       "--disable-setuid-sandbox",
+      "--disable-web-security",
     ],
   });
 
-  context = await browser.newContext({
+  return browser;
+}
+
+async function request(index) {
+  const b = await getBrowser();
+  const context = await b.newContext({
     userAgent:
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
     viewport: { width: 1366, height: 768 },
     extraHTTPHeaders: {
       "Accept-Language": "en-US,en;q=0.9",
-      "Accept-Encoding": "gzip, deflate, br",
     },
   });
 
-  page = await context.newPage();
+  const page = await context.newPage();
 
-  // Navigate to homepage to collect cookies/session
-  // Use 'domcontentloaded' instead of 'networkidle'
-  await page.goto("https://www.nseindia.com", {
-    waitUntil: "domcontentloaded",
-    timeout: 30000,
-  });
+  try {
+    // 1. Visit NSE page to establish session cookies
+    await page.goto("https://www.nseindia.com/market-data/top-gainers-losers", {
+      waitUntil: "domcontentloaded",
+      timeout: 30000,
+    });
 
-  // Brief pause to allow initial cookies to set
-  await page.waitForTimeout(2000);
+    // Short pause for cookies to set
+    await page.waitForTimeout(2500);
 
-  return page;
-}
+    // 2. Perform fetch inside the browser DOM (bypasses bot filters)
+    const data = await page.evaluate(async (targetIndex) => {
+      const res = await fetch(
+        `https://www.nseindia.com/api/live-analysis-variations?index=${targetIndex}`,
+        {
+          headers: {
+            accept: "application/json, text/plain, */*",
+            "sec-fetch-dest": "empty",
+            "sec-fetch-mode": "cors",
+            "sec-fetch-site": "same-origin",
+          },
+        }
+      );
 
-async function request(index) {
-  const p = await getPage();
+      if (!res.ok) {
+        throw new Error(`NSE HTTP ${res.status}: ${res.statusText}`);
+      }
 
-  // Fetch via page context so browser cookies/session are included
-  const response = await p.request.get(
-    `https://www.nseindia.com/api/live-analysis-variations?index=${index}`,
-    {
-      headers: {
-        accept: "application/json, text/plain, */*",
-        referer: "https://www.nseindia.com/market-data/top-gainers-losers",
-        "sec-fetch-dest": "empty",
-        "sec-fetch-mode": "cors",
-        "sec-fetch-site": "same-origin",
-      },
-    }
-  );
+      return await res.json();
+    }, index);
 
-  if (!response.ok()) {
-    throw new Error(
-      `NSE returned status: ${response.status()} ${response.statusText()}`
-    );
+    return data;
+  } finally {
+    // Clean up browser context after request
+    await context.close().catch(() => {});
   }
-
-  return await response.json();
 }
 
 export const fetchGainers = () => request("gainers");
