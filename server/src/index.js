@@ -15,7 +15,15 @@ import { buildRecommendations } from "./recommendations.js";
 const app = express();
 app.use(cors({ origin: process.env.CLIENT_ORIGIN?.split(",") || "*" }));
 app.use(express.json());
-const scanTimes = ["23:28", "23:31", "23:34"];
+const scanTimes = [
+  "09:25",
+  "09:35",
+  "09:45",
+  "09:55",
+  "10:05",
+  "10:15",
+  "10:25",
+];
 let scanning = false;
 const indiaTime = () =>
   new Intl.DateTimeFormat("en-GB", {
