@@ -1,31 +1,75 @@
-import axios from 'axios';
+import { chromium } from "playwright-extra";
+import stealthPlugin from "puppeteer-extra-plugin-stealth";
 
-const baseURL = 'https://www.nseindia.com';
-const headers = {
-  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/123 Safari/537.36',
-  Accept: 'application/json, text/plain, */*',
-  'Accept-Language': 'en-IN,en;q=0.9',
-  Referer: 'https://www.nseindia.com/market-data/live-market-indices'
-};
-let cookie = '';
+// Attach stealth plugin to trick anti-bot systems
+chromium.use(stealthPlugin());
 
-async function refreshSession() {
-  const response = await axios.get(baseURL, { headers, timeout: 15000 });
-  cookie = (response.headers['set-cookie'] || []).map((value) => value.split(';')[0]).join('; ');
+let browser;
+let context;
+let page;
+
+async function getPage() {
+  if (page && !page.isClosed()) return page;
+
+  browser = await chromium.launch({
+    headless: true,
+    args: [
+      "--disable-blink-features=AutomationControlled",
+      "--no-sandbox",
+      "--disable-setuid-sandbox",
+    ],
+  });
+
+  context = await browser.newContext({
+    userAgent:
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    viewport: { width: 1366, height: 768 },
+    extraHTTPHeaders: {
+      "Accept-Language": "en-US,en;q=0.9",
+      "Accept-Encoding": "gzip, deflate, br",
+    },
+  });
+
+  page = await context.newPage();
+
+  // Navigate to homepage to collect cookies/session
+  // Use 'domcontentloaded' instead of 'networkidle'
+  await page.goto("https://www.nseindia.com", {
+    waitUntil: "domcontentloaded",
+    timeout: 30000,
+  });
+
+  // Brief pause to allow initial cookies to set
+  await page.waitForTimeout(2000);
+
+  return page;
 }
-async function request(index, retried = false) {
-  try {
-    if (!cookie) await refreshSession();
-    const response = await axios.get(`${baseURL}/api/live-analysis-variations?index=${index}`, {
-      headers: { ...headers, Cookie: cookie }, timeout: 20000
-    });
-    return response.data;
-  } catch (error) {
-    if (!retried) { cookie = ''; return request(index, true); }
-    const status = error.response?.status;
-    throw new Error(`NSE data is unavailable${status ? ` (HTTP ${status})` : ''}. Please try again shortly.`);
+
+async function request(index) {
+  const p = await getPage();
+
+  // Fetch via page context so browser cookies/session are included
+  const response = await p.request.get(
+    `https://www.nseindia.com/api/live-analysis-variations?index=${index}`,
+    {
+      headers: {
+        accept: "application/json, text/plain, */*",
+        referer: "https://www.nseindia.com/market-data/top-gainers-losers",
+        "sec-fetch-dest": "empty",
+        "sec-fetch-mode": "cors",
+        "sec-fetch-site": "same-origin",
+      },
+    }
+  );
+
+  if (!response.ok()) {
+    throw new Error(
+      `NSE returned status: ${response.status()} ${response.statusText()}`
+    );
   }
+
+  return await response.json();
 }
 
-export const fetchGainers = () => request('gainers');
-export const fetchLosers = () => request('losers');
+export const fetchGainers = () => request("gainers");
+export const fetchLosers = () => request("losers");
