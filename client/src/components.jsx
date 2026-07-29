@@ -59,9 +59,18 @@ export function Empty({ text }) {
   return <div className="empty">{text}</div>;
 }
 
+// src/components.jsx
+
 export function Recommendation({ item }) {
   if (!item) return <Empty text="Recommendations are generated after the available scans are analysed." />;
-  const tone = item.side === 'buy' ? 'gain' : 'loss';
+  
+  const tone = item.side === 'buy' || !item.side ? 'gain' : 'loss';
+  
+  // Calculate Target Levels for Groww Intraday
+  const entryPrice = Number(item.raw?.ltp || item.currentChange || 0);
+  const targetPrice = (entryPrice * 1.01).toFixed(2);
+  const stopLossPrice = (entryPrice * 0.995).toFixed(2);
+
   return (
     <article className="recommendation">
       <div className="recommendation-top">
@@ -78,6 +87,25 @@ export function Recommendation({ item }) {
           <small>confidence</small>
         </div>
       </div>
+
+      {/* Target Trading Levels */}
+      {entryPrice > 0 && (
+        <div className="target-levels">
+          <div>
+            <small>Entry (LTP)</small>
+            <b>₹{entryPrice}</b>
+          </div>
+          <div>
+            <small>Target (+1%)</small>
+            <b className="pos">₹{targetPrice}</b>
+          </div>
+          <div>
+            <small>SL (-0.5%)</small>
+            <b className="neg">₹{stopLossPrice}</b>
+          </div>
+        </div>
+      )}
+
       <div className="trends">
         <span>
           Rank <b>{item.rankTrend?.join(' → ')}</b>

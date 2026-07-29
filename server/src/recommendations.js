@@ -11,19 +11,24 @@ const volumeOf = (row) =>
   asNum(row.totalTradedVolume ?? row.volume ?? row.totalTradedValue ?? 0);
 const rankOf = (row, index) => asNum(row.rank) || index + 1;
 
-function normalise(rows) {
-  // Extract potential array target
-  let candidate = Array.isArray(rows)
-    ? rows
-    : Array.isArray(rows?.data)
-    ? rows.data
-    : Array.isArray(rows?.NIFTY?.data)
-    ? rows.NIFTY.data
-    : Array.isArray(rows?.NIFTY)
-    ? rows.NIFTY
-    : [];
+// Updated normalise function to target specific categories like 'FOSec' or 'allSec'
+function normalise(rows, category) {
+  let candidate = [];
 
-  // Ensure candidate is strictly an array
+  if (Array.isArray(rows)) {
+    candidate = rows;
+  } else if (category && rows?.[category]) {
+    candidate = Array.isArray(rows[category]?.data)
+      ? rows[category].data
+      : Array.isArray(rows[category])
+      ? rows[category]
+      : [];
+  } else if (Array.isArray(rows?.data)) {
+    candidate = rows.data;
+  } else if (Array.isArray(rows?.NIFTY?.data)) {
+    candidate = rows.NIFTY.data;
+  }
+
   const list = Array.isArray(candidate) ? candidate : [];
 
   return list.slice(0, 10).map((row, index) => ({
@@ -46,14 +51,16 @@ const rising = (values, direction = 1) => {
     : improvingSteps / (steps.length * 2);
 };
 
-function calculate(scans, side) {
+function calculate(scans, side, category = null) {
   const records = new Map();
-  scans.forEach((scan) =>
-    normalise(scan[side]).forEach((stock) => {
+  scans.forEach((scan) => {
+    const rawData = scan[side];
+    normalise(rawData, category).forEach((stock) => {
       if (!records.has(stock.symbol)) records.set(stock.symbol, []);
       records.get(stock.symbol).push({ ...stock, time: scan.time });
-    })
-  );
+    });
+  });
+
   const total = scans.length || 1;
   return [...records.entries()]
     .map(([symbol, points]) => {
@@ -66,6 +73,7 @@ function calculate(scans, side) {
       const momentum = rising(changes);
       const volumeGrowth = rising(volumes);
       const improvement = rising(ranks, -1);
+
       const confidence = Math.round(
         Math.min(
           100,
@@ -77,6 +85,7 @@ function calculate(scans, side) {
               improvement * 0.1)
         )
       );
+
       const latest = points.at(-1);
       const reasons = [
         `Appeared in ${points.length} of ${total} scans`,
@@ -91,6 +100,7 @@ function calculate(scans, side) {
           ? "Rank improved over time"
           : "Rank trend considered",
       ];
+
       const signal =
         confidence >= 80
           ? `Strong ${side === "gainers" ? "Buy" : "Sell"}`
@@ -101,6 +111,7 @@ function calculate(scans, side) {
           : confidence >= 40
           ? "Watch"
           : "Avoid";
+
       return {
         symbol,
         side: side === "gainers" ? "buy" : "sell",
@@ -117,9 +128,16 @@ function calculate(scans, side) {
     })
     .sort(
       (a, b) => b.confidence - a.confidence || a.currentRank - b.currentRank
-    );
+    )
+    .slice(0, 3); // Restrict output to Top 3
 }
 
+// Updated buildRecommendations output structure
 export function buildRecommendations(scans) {
-  return { buy: calculate(scans, "gainers"), sell: calculate(scans, "losers") };
+  return {
+    foTop3: calculate(scans, "gainers", "FOSec"),
+    overallTop3: calculate(scans, "gainers", "allSec"),
+    buy: calculate(scans, "gainers"), // Kept for backward compatibility
+    sell: calculate(scans, "losers"), // Kept for backward compatibility
+  };
 }

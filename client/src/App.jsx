@@ -28,12 +28,22 @@ export default function App() {
 }
 // src/App.jsx
 
+// src/App.jsx
+
 function Dashboard({ day, latest, recommendations, time, next }) { 
-  const scanCount = SCAN_TIMES.filter((scheduledTime) => day?.scans?.some((scan) => scan.time === scheduledTime)).length; 
+  const scanCount = SCAN_TIMES.filter((scheduledTime) => 
+    day?.scans?.some((scan) => scan.time === scheduledTime)
+  ).length; 
   
-  // Extract top 3 items safely
-  const topBuys = Array.isArray(recommendations?.buy) ? recommendations.buy.slice(0, 3) : [];
-  const topSells = Array.isArray(recommendations?.sell) ? recommendations.sell.slice(0, 3) : [];
+  // Safely extract Top 3 arrays from backend payload
+  const foTop3 = Array.isArray(recommendations?.foTop3) 
+    ? recommendations.foTop3.slice(0, 3) 
+    : [];
+  const overallTop3 = Array.isArray(recommendations?.overallTop3) 
+    ? recommendations.overallTop3.slice(0, 3) 
+    : Array.isArray(recommendations?.buy) 
+    ? recommendations.buy.slice(0, 3) 
+    : [];
 
   return (
     <>
@@ -75,24 +85,43 @@ function Dashboard({ day, latest, recommendations, time, next }) {
 
       <section className="card recommendations">
         <div className="section-heading">
-          <div><h2>Momentum recommendations</h2><span>Top 3 multi-factor analysis</span></div>
+          <div>
+            <h2>Momentum recommendations</h2>
+            <span>Top 3 F&O (Liquidity) vs. Top 3 Overall (Breakout)</span>
+          </div>
           <span className="spark">✦</span>
         </div>
         
-        <div className="recommend-grid">
-          {/* Top 3 Buy Recommendations */}
-          {topBuys.length > 0 ? (
-            topBuys.map((item) => <Recommendation key={item.symbol} item={item} />)
-          ) : (
-            <Recommendation item={null} />
-          )}
+        <div className="dual-rec-container">
+          {/* F&O Top 3 Group */}
+          <div className="rec-group">
+            <div className="rec-group-title">
+              <h3>F&O Top 3</h3>
+              <span className="tag fo-tag">Zero Circuit Risk</span>
+            </div>
+            <div className="recommend-grid">
+              {foTop3.length > 0 ? (
+                foTop3.map((item) => <Recommendation key={`fo-${item.symbol}`} item={item} />)
+              ) : (
+                <Empty text="No F&O recommendations analyzed yet." />
+              )}
+            </div>
+          </div>
 
-          {/* Top 3 Sell Recommendations */}
-          {topSells.length > 0 ? (
-            topSells.map((item) => <Recommendation key={item.symbol} item={item} />)
-          ) : (
-            <Recommendation item={null} />
-          )}
+          {/* Overall Top 3 Group */}
+          <div className="rec-group">
+            <div className="rec-group-title">
+              <h3>Overall Top 3</h3>
+              <span className="tag overall-tag">Max Momentum</span>
+            </div>
+            <div className="recommend-grid">
+              {overallTop3.length > 0 ? (
+                overallTop3.map((item) => <Recommendation key={`all-${item.symbol}`} item={item} />)
+              ) : (
+                <Empty text="No overall recommendations analyzed yet." />
+              )}
+            </div>
+          </div>
         </div>
       </section>
     </> 
