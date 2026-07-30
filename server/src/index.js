@@ -108,9 +108,9 @@ app.get("/api/recommendations", async (_, res, next) => {
   try {
     const day = await getToday();
     res.json(
-      day.recommendations?.buy
+      day.recommendations?.foTop3
         ? day.recommendations
-        : buildRecommendations(day.scans)
+        : await buildRecommendations(day.scans)
     );
   } catch (e) {
     next(e);

@@ -6,25 +6,147 @@ const SCAN_TIMES = ['09:25', '09:35', '09:45', '09:55', '10:05', '10:15', '10:25
 const clock = () => new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', second: '2-digit' });
 function nextScan(scans) { return SCAN_TIMES.find((time) => !scans.some((scan) => scan.time === time)) || 'Complete'; }
 
+// src/App.jsx
+
 export default function App() {
-  const [day, setDay] = useState(null); const [recommendations, setRecommendations] = useState({});
-  const [page, setPage] = useState('home'); const [history, setHistory] = useState([]); const [selected, setSelected] = useState(null);
-  const [loading, setLoading] = useState(true); const [busy, setBusy] = useState(false); const [error, setError] = useState(''); const [time, setTime] = useState(clock());
-  const refresh = useCallback(async () => { setLoading(true); setError(''); try { const [scans, recs] = await Promise.all([api.get('/scans'), api.get('/recommendations')]); setDay(scans.data); setRecommendations(recs.data); } catch (e) { setError(e.response?.data?.error || 'Could not connect to the scanner API.'); } finally { setLoading(false); } }, []);
-  useEffect(() => { refresh(); const interval = setInterval(() => setTime(clock()), 1000); return () => clearInterval(interval); }, [refresh]);
-  const latest = day?.scans?.at(-1); const next = nextScan(day?.scans || []);
-  const manualScan = async () => { setBusy(true); setError(''); try { await api.post('/scan'); await refresh(); } catch (e) { setError(e.response?.data?.error || 'Scan failed.'); } finally { setBusy(false); } };
-  const analyse = async () => { setBusy(true); try { const result = await api.get('/recommendations'); setRecommendations(result.data); } catch (e) { setError(e.response?.data?.error || 'Analysis failed.'); } finally { setBusy(false); } };
-  const loadHistory = async () => { setPage('history'); try { setHistory((await api.get('/history')).data); } catch { setError('History could not be loaded.'); } };
-  const exportJson = () => { const blob = new Blob([JSON.stringify(day, null, 2)], { type: 'application/json' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = `nse-scans-${day?.date || 'today'}.json`; a.click(); URL.revokeObjectURL(url); };
-  const clear = async () => { if (!window.confirm("Clear today's scan data?")) return; setBusy(true); try { setDay((await api.delete('/today')).data); setRecommendations({}); } catch { setError('Could not clear today’s data.'); } finally { setBusy(false); } };
-  const dayToShow = selected || day;
-  return <main className="app-shell"><header><div><p className="eyebrow">PERSONAL MARKET RESEARCH</p><h1>NSE Momentum <em>Scanner</em></h1></div><button className="icon-button" onClick={refresh} aria-label="Refresh">↻</button></header>
-    <nav><button className={page === 'home' ? 'active' : ''} onClick={() => setPage('home')}>Dashboard</button><button className={page === 'history' ? 'active' : ''} onClick={loadHistory}>History</button><button className={page === 'settings' ? 'active' : ''} onClick={() => setPage('settings')}>Settings</button></nav>
-    {error && <div className="alert">{error}<button onClick={() => setError('')}>×</button></div>}
-    {loading ? <div className="loading">Loading market workspace…</div> : page === 'home' ? <Dashboard day={day} latest={latest} recommendations={recommendations} time={time} next={next} /> : page === 'history' ? <History history={history} selected={selected} setSelected={setSelected} day={dayToShow} /> : <Settings busy={busy} manualScan={manualScan} analyse={analyse} exportJson={exportJson} clear={clear} />}
-    <footer>Confidence reflects observed momentum from collected scans — it is not a prediction or trading advice.</footer>
-  </main>;
+  const [day, setDay] = useState(null);
+  const [recommendations, setRecommendations] = useState({});
+  const [page, setPage] = useState('home');
+  const [history, setHistory] = useState([]);
+  const [selected, setSelected] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [scanStatus, setScanStatus] = useState(''); // New: Track scan progress message
+  const [error, setError] = useState('');
+  const [time, setTime] = useState(clock());
+
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    setError('');
+    try {
+      const [scans, recs] = await Promise.all([
+        api.get('/scans'),
+        api.get('/recommendations'),
+      ]);
+      setDay(scans.data);
+      setRecommendations(recs.data);
+    } catch (e) {
+      setError(e.response?.data?.error || 'Could not connect to the scanner API.');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    refresh();
+    const interval = setInterval(() => setTime(clock()), 1000);
+    return () => clearInterval(interval);
+  }, [refresh]);
+
+  const latest = day?.scans?.at(-1);
+  const next = nextScan(day?.scans || []);
+
+  const manualScan = async () => {
+    setBusy(true);
+    setScanStatus('Fetching live NSE market data…');
+    setError('');
+    try {
+      await api.post('/scan');
+      setScanStatus('Analyzing 1-min chart candles & technical indicators…');
+      await refresh();
+    } catch (e) {
+      setError(e.response?.data?.error || 'Scan failed.');
+    } finally {
+      setBusy(false);
+      setScanStatus('');
+    }
+  };
+
+  const analyse = async () => {
+    setBusy(true);
+    setScanStatus('Calculating RSI, EMA & Momentum Scores…');
+    try {
+      const result = await api.get('/recommendations');
+      setRecommendations(result.data);
+    } catch (e) {
+      setError(e.response?.data?.error || 'Analysis failed.');
+    } finally {
+      setBusy(false);
+      setScanStatus('');
+    }
+  };
+
+  return (
+    <main className="app-shell">
+      <header>
+        <div>
+          <p className="eyebrow">PERSONAL MARKET RESEARCH</p>
+          <h1>NSE Momentum <em>Scanner</em></h1>
+        </div>
+        <button className="icon-button" onClick={refresh} aria-label="Refresh">
+          ↻
+        </button>
+      </header>
+
+      <nav>
+        <button className={page === 'home' ? 'active' : ''} onClick={() => setPage('home')}>
+          Dashboard
+        </button>
+        <button className={page === 'history' ? 'active' : ''} onClick={() => setPage('history')}>
+          History
+        </button>
+        <button className={page === 'settings' ? 'active' : ''} onClick={() => setPage('settings')}>
+          Settings
+        </button>
+      </nav>
+
+      {/* Dynamic Scan Progress Bar Banner */}
+      {busy && (
+        <div className="progress-banner">
+          <div className="progress-text">
+            <span>{scanStatus || 'Processing market scan...'}</span>
+            <span className="spinner">◌</span>
+          </div>
+          <div className="progress-bar-container">
+            <div className="progress-bar-fill" />
+          </div>
+        </div>
+      )}
+
+      {error && (
+        <div className="alert">
+          {error}
+          <button onClick={() => setError('')}>×</button>
+        </div>
+      )}
+
+      {loading ? (
+        <div className="loading">Loading market workspace…</div>
+      ) : page === 'home' ? (
+        <Dashboard
+          day={day}
+          latest={latest}
+          recommendations={recommendations}
+          time={time}
+          next={next}
+        />
+      ) : page === 'history' ? (
+        <History history={history} selected={selected} setSelected={setSelected} day={dayToShow} />
+      ) : (
+        <Settings
+          busy={busy}
+          manualScan={manualScan}
+          analyse={analyse}
+          exportJson={exportJson}
+          clear={clear}
+        />
+      )}
+
+      <footer>
+        Confidence reflects observed momentum from collected scans — it is not a prediction or trading advice.
+      </footer>
+    </main>
+  );
 }
 // src/App.jsx
 
