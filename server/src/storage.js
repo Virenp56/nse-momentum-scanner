@@ -1,7 +1,6 @@
 // storage.js
 import mongoose from "mongoose";
 
-// Railway automatically exposes MONGO_URL or MONGO_PRIVATE_URL
 const MONGO_URI =
   process.env.MONGO_URL ||
   process.env.DATABASE_URL ||
@@ -19,11 +18,10 @@ export async function connectDB() {
   }
 
   try {
-    // Disable buffering so queries fail immediately with clear errors if disconnected
     mongoose.set("bufferCommands", false);
 
     const db = await mongoose.connect(MONGO_URI, {
-      serverSelectionTimeoutMS: 5000, // Fail fast after 5s instead of hanging for 10s
+      serverSelectionTimeoutMS: 5000,
     });
 
     isConnected = db.connections[0].readyState === 1;
@@ -34,7 +32,6 @@ export async function connectDB() {
   }
 }
 
-// Day Schema Definition
 const DaySchema = new mongoose.Schema(
   {
     date: { type: String, required: true, unique: true },
@@ -87,4 +84,15 @@ export async function clearToday() {
     { scans: [], recommendations: {} },
     { new: true }
   );
+}
+
+export async function getDay(date) {
+  await connectDB();
+  return await Day.findOne({ date });
+}
+
+export async function getHistory() {
+  await connectDB();
+  const todayDate = dateKey();
+  return await Day.find({ date: { $ne: todayDate } }).sort({ date: -1 });
 }

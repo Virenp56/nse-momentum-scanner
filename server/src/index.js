@@ -4,7 +4,8 @@ import express from "express";
 import cors from "cors";
 import cron from "node-cron";
 import { fetchGainers, fetchLosers } from "./nse.js";
-import { getToday, getDay, saveToday, clearToday } from "./storage.js";
+// AFTER (Remove getDay)
+import { getToday, saveToday, clearToday, connectDB } from "./storage.js";
 import { buildRecommendations } from "./recommendations.js";
 // index.js (At the bottom of your file)
 
