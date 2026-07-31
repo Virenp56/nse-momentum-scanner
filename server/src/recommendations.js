@@ -163,47 +163,59 @@ async function calculate(scans, side, category = null) {
   const verifiedResults = [];
 
   for (const candidate of top10Candidates) {
-    let techScore = 0.5;
+    let techScore = 0.5; // Default neutral score
     let rsi = 50;
     let ema9 = 0;
     let ema21 = 0;
     let isBullishEma = false;
     let hasVolumeSpike = false;
 
-    await delay(400);
+    await delay(1200); // 500ms delay to avoid rate limiting
 
-    const chartRes = await getCachedChartData(candidate.symbol);
+    try {
+      const chartRes = await getCachedChartData(candidate.symbol);
 
-    if (chartRes && Array.isArray(chartRes.data) && chartRes.data.length > 20) {
-      const closes = chartRes.data.map(
-        (tick) => tick.close || tick[4] || tick[1]
-      );
-      const minuteVolumes = chartRes.data.map(
-        (tick) => tick.volume || tick[5] || 0
-      );
+      if (
+        chartRes &&
+        Array.isArray(chartRes.data) &&
+        chartRes.data.length > 20
+      ) {
+        const closes = chartRes.data.map(
+          (tick) => tick.close || tick[4] || tick[1]
+        );
+        const minuteVolumes = chartRes.data.map(
+          (tick) => tick.volume || tick[5] || 0
+        );
 
-      rsi = calculateRSI(closes, 14);
-      ema9 = calculateEMA(closes, 9);
-      ema21 = calculateEMA(closes, 21);
+        rsi = calculateRSI(closes, 14);
+        ema9 = calculateEMA(closes, 9);
+        ema21 = calculateEMA(closes, 21);
 
-      isBullishEma = ema9 > ema21;
-      const isRsiOptimal = rsi >= 55 && rsi <= 75;
+        isBullishEma = ema9 > ema21;
+        const isRsiOptimal = rsi >= 55 && rsi <= 75;
 
-      if (minuteVolumes.length >= 20) {
-        const recentVol = minuteVolumes.at(-1);
-        const avgVol = minuteVolumes.slice(-20).reduce((a, b) => a + b, 0) / 20;
-        hasVolumeSpike = avgVol > 0 && recentVol > 1.5 * avgVol;
+        if (minuteVolumes.length >= 20) {
+          const recentVol = minuteVolumes.at(-1);
+          const avgVol =
+            minuteVolumes.slice(-20).reduce((a, b) => a + b, 0) / 20;
+          hasVolumeSpike = avgVol > 0 && recentVol > 1.5 * avgVol;
+        }
+
+        if (isBullishEma && isRsiOptimal) {
+          techScore = hasVolumeSpike ? 1.0 : 0.85;
+        } else if (isBullishEma || isRsiOptimal) {
+          techScore = 0.65;
+        } else if (rsi > 80) {
+          techScore = 0.2;
+        }
       }
-
-      if (isBullishEma && isRsiOptimal) {
-        techScore = hasVolumeSpike ? 1.0 : 0.85;
-      } else if (isBullishEma || isRsiOptimal) {
-        techScore = 0.65;
-      } else if (rsi > 80) {
-        techScore = 0.2;
-      }
+    } catch (err) {
+      console.error(
+        `Skipped live charts for ${candidate.symbol}, using scan score fallback.`
+      );
     }
 
+    // Calculate final confidence rating
     const finalConfidence = Math.round(
       Math.min(100, 100 * (candidate.baseScore * 0.7 + techScore * 0.3))
     );
