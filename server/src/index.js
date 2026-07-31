@@ -1,36 +1,17 @@
-// index.js
+// src/index.js
 import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import cron from "node-cron";
 import { fetchGainers, fetchLosers } from "./nse.js";
-// AFTER (Remove getDay)
 import { getToday, saveToday, clearToday, connectDB } from "./storage.js";
 import { buildRecommendations } from "./recommendations.js";
-// index.js (At the bottom of your file)
 
-import { connectDB } from "./storage.js";
-
-const port = process.env.PORT || 8080;
-
-// Connect to MongoDB first, then start listening
-connectDB()
-  .then(() => {
-    app.listen(port, () =>
-      console.log(`NSE Momentum API listening on port ${port}`)
-    );
-  })
-  .catch((err) => {
-    console.error(
-      "Server startup failed due to DB connection error:",
-      err.message
-    );
-  });
 const app = express();
 app.use(cors({ origin: process.env.CLIENT_ORIGIN?.split(",") || "*" }));
 app.use(express.json());
 
-// Updated to 15-minute intervals
+// 15-minute scheduled scan slots
 const scanTimes = [
   "09:30",
   "09:45",
@@ -83,6 +64,7 @@ async function runScan(forcedTime) {
   }
 }
 
+// Set up cron schedules
 for (const time of scanTimes) {
   const [hour, minute] = time.split(":");
   cron.schedule(
@@ -136,4 +118,18 @@ app.use((err, _, res, __) => {
   res.status(500).json({ error: err.message || "Unexpected server error" });
 });
 
-app.listen(port, () => console.log(`NSE Momentum API listening on ${port}`));
+// Single port declaration and MongoDB startup hook
+const port = process.env.PORT || 8080;
+
+connectDB()
+  .then(() => {
+    app.listen(port, () =>
+      console.log(`NSE Momentum API listening on port ${port}`)
+    );
+  })
+  .catch((err) => {
+    console.error(
+      "Server startup failed due to DB connection error:",
+      err.message
+    );
+  });
