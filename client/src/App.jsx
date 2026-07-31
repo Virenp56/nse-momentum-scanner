@@ -1,10 +1,10 @@
 // src/App.jsx
-
 import { useCallback, useEffect, useState } from 'react';
 import { api } from './api';
-import { Empty, Recommendation, StockList } from './components';
+import { Empty, Recommendation } from './components';
 
-const SCAN_TIMES = ['09:25', '09:35', '09:45', '09:55', '10:05', '10:15', '10:25'];
+const SCAN_TIMES = ['09:30', '09:45', '10:00', '10:15', '10:30', '10:45', '11:00'];
+
 const clock = () =>
   new Date().toLocaleTimeString('en-IN', {
     timeZone: 'Asia/Kolkata',
@@ -21,8 +21,6 @@ export default function App() {
   const [day, setDay] = useState(null);
   const [recommendations, setRecommendations] = useState({});
   const [page, setPage] = useState('home');
-  const [history, setHistory] = useState([]);
-  const [selected, setSelected] = useState(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [scanStatus, setScanStatus] = useState('');
@@ -61,7 +59,7 @@ export default function App() {
     setError('');
     try {
       await api.post('/scan');
-      setScanStatus('Analyzing 1-min chart candles & technical indicators…');
+      setScanStatus('Analyzing Top 10 stocks via 1-min charts, RSI & EMA…');
       await refresh();
     } catch (e) {
       setError(e.response?.data?.error || 'Scan failed.');
@@ -73,7 +71,7 @@ export default function App() {
 
   const analyse = async () => {
     setBusy(true);
-    setScanStatus('Calculating RSI, EMA & Momentum Scores…');
+    setScanStatus('Running technical evaluation across Top 10 candidates…');
     try {
       const result = await api.get('/recommendations');
       setRecommendations(result.data);
@@ -82,15 +80,6 @@ export default function App() {
     } finally {
       setBusy(false);
       setScanStatus('');
-    }
-  };
-
-  const loadHistory = async () => {
-    setPage('history');
-    try {
-      setHistory((await api.get('/history')).data);
-    } catch {
-      setError('History could not be loaded.');
     }
   };
 
@@ -117,9 +106,6 @@ export default function App() {
     }
   };
 
-  // Safe fallback for selected day in history
-  const dayToShow = selected || day;
-
   return (
     <main className="app-shell">
       <header>
@@ -136,15 +122,12 @@ export default function App() {
         <button className={page === 'home' ? 'active' : ''} onClick={() => setPage('home')}>
           Dashboard
         </button>
-        <button className={page === 'history' ? 'active' : ''} onClick={loadHistory}>
-          History
-        </button>
         <button className={page === 'settings' ? 'active' : ''} onClick={() => setPage('settings')}>
           Settings
         </button>
       </nav>
 
-      {/* Live Scan Progress Banner */}
+      {/* Dynamic Scan Progress Banner */}
       {busy && (
         <div className="progress-banner">
           <div className="progress-text">
@@ -169,17 +152,9 @@ export default function App() {
       ) : page === 'home' ? (
         <Dashboard
           day={day}
-          latest={latest}
           recommendations={recommendations}
           time={time}
           next={next}
-        />
-      ) : page === 'history' ? (
-        <History
-          history={history}
-          selected={selected}
-          setSelected={setSelected}
-          day={dayToShow}
         />
       ) : (
         <Settings
@@ -198,7 +173,7 @@ export default function App() {
   );
 }
 
-function Dashboard({ day, latest, recommendations, time, next }) {
+function Dashboard({ day, recommendations, time, next }) {
   const scanCount = SCAN_TIMES.filter((scheduledTime) =>
     day?.scans?.some((scan) => scan.time === scheduledTime)
   ).length;
@@ -224,7 +199,7 @@ function Dashboard({ day, latest, recommendations, time, next }) {
           <span className="label">NEXT SCAN</span>
           <strong>{next}</strong>
           <span className="market-time">
-            {next === 'Complete' ? 'Morning run complete' : 'Scheduled automatically'}
+            {next === 'Complete' ? 'Morning run complete' : 'Scheduled automatically (15m interval)'}
           </span>
         </div>
       </section>
@@ -252,22 +227,17 @@ function Dashboard({ day, latest, recommendations, time, next }) {
         </div>
       </section>
 
-      <div className="two-column">
-        <StockList title="Top Gainers" data={latest?.gainers} kind="gain" />
-        <StockList title="Top Losers" data={latest?.losers} kind="loss" />
-      </div>
-
       <section className="card recommendations">
         <div className="section-heading">
           <div>
             <h2>Momentum recommendations</h2>
-            <span>Top 3 F&O (Liquidity) vs. Top 3 Overall (Breakout)</span>
+            <span>Top 3 F&O vs. Top 3 Overall (Filtered from Top 10 Analysis)</span>
           </div>
           <span className="spark">✦</span>
         </div>
 
         <div className="dual-rec-container">
-          {/* F&O Top 3 Column */}
+          {/* F&O Top 3 Group */}
           <div className="rec-group">
             <div className="rec-group-title">
               <h3>F&O Top 3</h3>
@@ -282,7 +252,7 @@ function Dashboard({ day, latest, recommendations, time, next }) {
             </div>
           </div>
 
-          {/* Overall Top 3 Column */}
+          {/* Overall Top 3 Group */}
           <div className="rec-group">
             <div className="rec-group-title">
               <h3>Overall Top 3</h3>
@@ -299,48 +269,6 @@ function Dashboard({ day, latest, recommendations, time, next }) {
         </div>
       </section>
     </>
-  );
-}
-
-function History({ history, selected, setSelected, day }) {
-  return (
-    <section className="history">
-      <div className="section-title">
-        <h2>Market history</h2>
-        <span>Previous saved sessions</span>
-      </div>
-      {history.length ? (
-        <div className="history-list">
-          {history.map((item) => (
-            <button
-              key={item.date}
-              className={selected?.date === item.date ? 'selected' : ''}
-              onClick={() => setSelected(item)}
-            >
-              <b>{item.date}</b>
-              <span>{item.scans?.length || 0} scans</span>
-              <i>›</i>
-            </button>
-          ))}
-        </div>
-      ) : (
-        <Empty text="No previous trading days have been archived yet." />
-      )}
-      {selected && (
-        <div className="detail">
-          <h2>{day?.date} scans</h2>
-          {day?.scans?.map((scan) => (
-            <div className="card scan-detail" key={scan.time}>
-              <h3>{scan.time}</h3>
-              <div>
-                <StockList title="Gainers" data={scan.gainers} kind="gain" />
-                <StockList title="Losers" data={scan.losers} kind="loss" />
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-    </section>
   );
 }
 
@@ -363,7 +291,7 @@ function Settings({ busy, manualScan, analyse, exportJson, clear }) {
         <span>✦</span>
         <div>
           <b>Run analysis</b>
-          <small>Recalculate momentum scores</small>
+          <small>Recalculate momentum scores across Top 10</small>
         </div>
         <i>›</i>
       </button>

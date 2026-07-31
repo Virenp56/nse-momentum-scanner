@@ -92,19 +92,27 @@ export async function fetchChartData(symbol) {
     const toDate = Math.floor(Date.now() / 1000);
     const fromDate = toDate - 5 * 3600; // Past 5 hours
 
-    const chartData = await page.evaluate(
-      async ({ sym, from, to }) => {
-        const encodedSym = encodeURIComponent(sym + "-EQ");
-        const url = `https://charting.nseindia.com/v1/charts/symbolHistoricalData?token=2031&fromDate=${from}&toDate=${to}&symbol=${encodedSym}&symbolType=Equity&chartType=I&timeInterval=1`;
+ const chartData = await page.evaluate(async ({ sym, from, to }) => {
+  const encodedSym = encodeURIComponent(sym + "-EQ");
+  const url = `https://charting.nseindia.com/v1/charts/symbolHistoricalData?token=2031&fromDate=${from}&toDate=${to}&symbol=${encodedSym}&symbolType=Equity&chartType=I&timeInterval=1`;
 
-        const res = await fetch(url, {
-          headers: { accept: "application/json, text/plain, */*" },
-        });
-        if (!res.ok) return null;
-        return await res.json();
-      },
-      { sym: symbol, from: fromDate, to: toDate }
-    );
+  const res = await fetch(url, {
+    method: "GET",
+    headers: {
+      "Accept": "application/json, text/plain, */*",
+      "Accept-Language": "en-US,en;q=0.9",
+      "Referer": `https://www.nseindia.com/get-quotes/equity?symbol=${encodeURIComponent(sym)}`,
+    },
+    credentials: "include", // Ensures cookies established by Playwright are sent
+  });
+
+  if (!res.ok) {
+    console.warn(`NSE HTTP ${res.status} for ${sym}`);
+    return null;
+  }
+
+  return await res.json();
+}, { sym: symbol, from: fromDate, to: toDate });
 
     return chartData;
   } catch (err) {

@@ -14,7 +14,8 @@ const volumeOf = (row) =>
   asNum(row.totalTradedVolume ?? row.volume ?? row.totalTradedValue ?? 0);
 const rankOf = (row, index) => asNum(row.rank) || index + 1;
 
-// Technical Math Utilities
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 function calculateRSI(prices, period = 14) {
   if (!prices || prices.length <= period) return 50;
   let gains = 0,
@@ -70,7 +71,8 @@ function normalise(rows, category) {
 
   const list = Array.isArray(candidate) ? candidate : [];
 
-  return list.slice(0, 10).map((row, index) => ({
+  // Extract up to 20 candidates per segment
+  return list.slice(0, 20).map((row, index) => ({
     symbol: symbolOf(row),
     rank: rankOf(row, index),
     change: changeOf(row),
@@ -90,6 +92,20 @@ const rising = (values, direction = 1) => {
     : improvingSteps / (steps.length * 2);
 };
 
+const chartCache = new Map();
+
+async function getCachedChartData(symbol) {
+  if (chartCache.has(symbol)) return chartCache.get(symbol);
+  try {
+    const data = await fetchChartData(symbol);
+    chartCache.set(symbol, data);
+    return data;
+  } catch (err) {
+    console.error(`Skipped live charts for ${symbol} (HTTP 403/Error)`);
+    return null;
+  }
+}
+
 async function calculate(scans, side, category = null) {
   const records = new Map();
   scans.forEach((scan) => {
@@ -108,12 +124,11 @@ async function calculate(scans, side, category = null) {
 
     const appearance = points.length / total;
     const averageRank = ranks.reduce((a, b) => a + b, 0) / ranks.length;
-    const rankScore = Math.max(0, (11 - averageRank) / 10);
+    const rankScore = Math.max(0, (21 - averageRank) / 20);
     const momentum = rising(changes);
     const volumeGrowth = rising(volumes);
     const improvement = rising(ranks, -1);
 
-    // Base Scan Score (Out of 100)
     const baseScore =
       appearance * 0.35 +
       rankScore * 0.2 +
@@ -136,61 +151,73 @@ async function calculate(scans, side, category = null) {
     };
   });
 
-  // Sort candidates by base score and pick top 5 for minute-level technical verification
   candidateList.sort((a, b) => b.baseScore - a.baseScore);
-  const topCandidates = candidateList.slice(0, 5);
 
+  // Filter out upper circuit risks (>19% gains)
+  const filteredCandidates = candidateList.filter(
+    (c) => c.latest.change < 19.0
+  );
+
+  // Take TOP 10 candidates
+  const top10Candidates = filteredCandidates.slice(0, 10);
   const verifiedResults = [];
 
-  for (const candidate of topCandidates) {
+  for (const candidate of top10Candidates) {
     let techScore = 0.5;
     let rsi = 50;
     let ema9 = 0;
     let ema21 = 0;
     let isBullishEma = false;
+    let hasVolumeSpike = false;
 
-    // Fetch 1-minute chart feed
-    const chartRes = await fetchChartData(candidate.symbol);
+    await delay(400);
 
-    if (chartRes && Array.isArray(chartRes.data)) {
-      // Extract close prices from minute ticks
+    const chartRes = await getCachedChartData(candidate.symbol);
+
+    if (chartRes && Array.isArray(chartRes.data) && chartRes.data.length > 20) {
       const closes = chartRes.data.map(
         (tick) => tick.close || tick[4] || tick[1]
       );
+      const minuteVolumes = chartRes.data.map(
+        (tick) => tick.volume || tick[5] || 0
+      );
 
-      if (closes.length > 20) {
-        rsi = calculateRSI(closes, 14);
-        ema9 = calculateEMA(closes, 9);
-        ema21 = calculateEMA(closes, 21);
-        isBullishEma = ema9 > ema21;
+      rsi = calculateRSI(closes, 14);
+      ema9 = calculateEMA(closes, 9);
+      ema21 = calculateEMA(closes, 21);
 
-        // RSI Momentum Zone: 55 to 75 is ideal for intraday breakouts
-        const isRsiOptimal = rsi >= 55 && rsi <= 75;
+      isBullishEma = ema9 > ema21;
+      const isRsiOptimal = rsi >= 55 && rsi <= 75;
 
-        if (isBullishEma && isRsiOptimal) {
-          techScore = 1.0;
-        } else if (isBullishEma || isRsiOptimal) {
-          techScore = 0.75;
-        } else if (rsi > 80) {
-          techScore = 0.2; // Penalty for overbought stocks
-        }
+      if (minuteVolumes.length >= 20) {
+        const recentVol = minuteVolumes.at(-1);
+        const avgVol = minuteVolumes.slice(-20).reduce((a, b) => a + b, 0) / 20;
+        hasVolumeSpike = avgVol > 0 && recentVol > 1.5 * avgVol;
+      }
+
+      if (isBullishEma && isRsiOptimal) {
+        techScore = hasVolumeSpike ? 1.0 : 0.85;
+      } else if (isBullishEma || isRsiOptimal) {
+        techScore = 0.65;
+      } else if (rsi > 80) {
+        techScore = 0.2;
       }
     }
 
-    // Hybrid Final Confidence: 75% Scan Progression + 25% Live Technicals
     const finalConfidence = Math.round(
-      Math.min(100, 100 * (candidate.baseScore * 0.75 + techScore * 0.25))
+      Math.min(100, 100 * (candidate.baseScore * 0.7 + techScore * 0.3))
     );
 
     const reasons = [
       `Appeared in ${candidate.points.length} of ${total} scans`,
-      candidate.averageRank <= 3
+      candidate.averageRank <= 5
         ? `Strong average rank: #${candidate.averageRank.toFixed(1)}`
         : `Average rank: #${candidate.averageRank.toFixed(1)}`,
       isBullishEma ? "EMA Trend: Bullish (EMA9 > EMA21)" : "EMA Trend: Neutral",
       rsi >= 55 && rsi <= 75
         ? `Optimal RSI Momentum (${rsi})`
         : `RSI Level: ${rsi}`,
+      ...(hasVolumeSpike ? ["Intraday Volume Spike Detected"] : []),
     ];
 
     const signal =
@@ -220,12 +247,15 @@ async function calculate(scans, side, category = null) {
     });
   }
 
+  // Return Top 3 calculated from the Top 10
   return verifiedResults
     .sort((a, b) => b.confidence - a.confidence)
-    .slice(0, 3); // Return Top 3
+    .slice(0, 3);
 }
 
 export async function buildRecommendations(scans) {
+  chartCache.clear();
+
   const [foTop3, overallTop3] = await Promise.all([
     calculate(scans, "gainers", "FOSec"),
     calculate(scans, "gainers", "allSec"),
