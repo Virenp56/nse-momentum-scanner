@@ -6,7 +6,25 @@ import cron from "node-cron";
 import { fetchGainers, fetchLosers } from "./nse.js";
 import { getToday, getDay, saveToday, clearToday } from "./storage.js";
 import { buildRecommendations } from "./recommendations.js";
+// index.js (At the bottom of your file)
 
+import { connectDB } from "./storage.js";
+
+const port = process.env.PORT || 8080;
+
+// Connect to MongoDB first, then start listening
+connectDB()
+  .then(() => {
+    app.listen(port, () =>
+      console.log(`NSE Momentum API listening on port ${port}`)
+    );
+  })
+  .catch((err) => {
+    console.error(
+      "Server startup failed due to DB connection error:",
+      err.message
+    );
+  });
 const app = express();
 app.use(cors({ origin: process.env.CLIENT_ORIGIN?.split(",") || "*" }));
 app.use(express.json());
@@ -117,5 +135,4 @@ app.use((err, _, res, __) => {
   res.status(500).json({ error: err.message || "Unexpected server error" });
 });
 
-const port = process.env.PORT || 8080;
 app.listen(port, () => console.log(`NSE Momentum API listening on ${port}`));

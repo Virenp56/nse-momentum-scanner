@@ -1,22 +1,43 @@
 // storage.js
 import mongoose from "mongoose";
 
-// 1. Connect to MongoDB using Railway's environment variable
-const MONGO_URI = process.env.MONGO_URL || process.env.DATABASE_URL;
+// Railway automatically exposes MONGO_URL or MONGO_PRIVATE_URL
+const MONGO_URI =
+  process.env.MONGO_URL ||
+  process.env.DATABASE_URL ||
+  process.env.MONGO_PRIVATE_URL;
 
-if (!MONGO_URI) {
-  console.warn("MongoDB URI missing! Check process.env.MONGO_URL on Railway.");
-} else {
-  mongoose
-    .connect(MONGO_URI)
-    .then(() => console.log("Connected to MongoDB successfully"))
-    .catch((err) => console.error("MongoDB connection error:", err.message));
+let isConnected = false;
+
+export async function connectDB() {
+  if (isConnected) return;
+
+  if (!MONGO_URI) {
+    throw new Error(
+      "MongoDB Connection Error: Missing MONGO_URL environment variable on Railway!"
+    );
+  }
+
+  try {
+    // Disable buffering so queries fail immediately with clear errors if disconnected
+    mongoose.set("bufferCommands", false);
+
+    const db = await mongoose.connect(MONGO_URI, {
+      serverSelectionTimeoutMS: 5000, // Fail fast after 5s instead of hanging for 10s
+    });
+
+    isConnected = db.connections[0].readyState === 1;
+    console.log("Connected to MongoDB successfully");
+  } catch (err) {
+    console.error("Failed to connect to MongoDB:", err.message);
+    throw err;
+  }
 }
 
-// 2. Define Day Schema (Matching your current JSON structure)
+// Day Schema Definition
 const DaySchema = new mongoose.Schema(
   {
-    date: { type: String, required: true, unique: true }, // e.g., '2026-07-31'
+    date: { type: String, required: true, unique: true },
     scans: { type: Array, default: [] },
     recommendations: { type: Object, default: {} },
     archived: { type: Boolean, default: false },
@@ -24,16 +45,15 @@ const DaySchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-const Day = mongoose.model("Day", DaySchema);
+const Day = mongoose.models.Day || mongoose.model("Day", DaySchema);
 
-// Helper for IST Date Key
 const dateKey = () =>
   new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(
     new Date()
   );
 
-// 3. Database Storage Methods
 export async function getToday() {
+  await connectDB();
   const todayDate = dateKey();
   let day = await Day.findOne({ date: todayDate });
 
@@ -50,6 +70,7 @@ export async function getToday() {
 }
 
 export async function saveToday(data) {
+  await connectDB();
   const todayDate = dateKey();
   return await Day.findOneAndUpdate(
     { date: todayDate },
@@ -59,20 +80,11 @@ export async function saveToday(data) {
 }
 
 export async function clearToday() {
+  await connectDB();
   const todayDate = dateKey();
   return await Day.findOneAndUpdate(
     { date: todayDate },
     { scans: [], recommendations: {} },
     { new: true }
   );
-}
-
-export async function getHistory() {
-  const todayDate = dateKey();
-  // Return all past trading days excluding today
-  return await Day.find({ date: { $ne: todayDate } }).sort({ date: -1 });
-}
-
-export async function getDay(date) {
-  return await Day.findOne({ date });
 }
