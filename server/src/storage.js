@@ -1,44 +1,78 @@
-import fs from 'node:fs/promises';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+// storage.js
+import mongoose from "mongoose";
 
-const here = path.dirname(fileURLToPath(import.meta.url));
-const dataDir = path.resolve(here, '../data');
-const todayPath = path.join(dataDir, 'today.json');
-const historyPath = path.join(dataDir, 'history.json');
+// 1. Connect to MongoDB using Railway's environment variable
+const MONGO_URI = process.env.MONGO_URL || process.env.DATABASE_URL;
 
-const dateKey = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date());
-const blankDay = () => ({ date: dateKey(), scans: [], recommendations: [] });
-
-async function readJson(file, fallback) {
-  try { return JSON.parse(await fs.readFile(file, 'utf8')); }
-  catch (error) { if (error.code === 'ENOENT') return fallback; throw error; }
-}
-async function writeJson(file, data) {
-  await fs.mkdir(dataDir, { recursive: true });
-  await fs.writeFile(file, JSON.stringify(data, null, 2), 'utf8');
+if (!MONGO_URI) {
+  console.warn("MongoDB URI missing! Check process.env.MONGO_URL on Railway.");
+} else {
+  mongoose
+    .connect(MONGO_URI)
+    .then(() => console.log("Connected to MongoDB successfully"))
+    .catch((err) => console.error("MongoDB connection error:", err.message));
 }
 
+// 2. Define Day Schema (Matching your current JSON structure)
+const DaySchema = new mongoose.Schema(
+  {
+    date: { type: String, required: true, unique: true }, // e.g., '2026-07-31'
+    scans: { type: Array, default: [] },
+    recommendations: { type: Object, default: {} },
+    archived: { type: Boolean, default: false },
+  },
+  { timestamps: true }
+);
+
+const Day = mongoose.model("Day", DaySchema);
+
+// Helper for IST Date Key
+const dateKey = () =>
+  new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(
+    new Date()
+  );
+
+// 3. Database Storage Methods
 export async function getToday() {
-  const today = await readJson(todayPath, blankDay());
-  if (today.date === dateKey()) return today;
-  // Preserve the preceding day before starting a fresh market day.
-  if (today.scans?.length) await archiveDay(today);
-  const next = blankDay();
-  await writeJson(todayPath, next);
-  return next;
+  const todayDate = dateKey();
+  let day = await Day.findOne({ date: todayDate });
+
+  if (!day) {
+    day = await Day.create({
+      date: todayDate,
+      scans: [],
+      recommendations: {},
+      archived: false,
+    });
+  }
+
+  return day;
 }
-export async function saveToday(day) { await writeJson(todayPath, day); }
-export async function archiveDay(day) {
-  const history = await readJson(historyPath, []);
-  const withoutSameDay = history.filter((item) => item.date !== day.date);
-  withoutSameDay.unshift(day);
-  await writeJson(historyPath, withoutSameDay.slice(0, 90));
+
+export async function saveToday(data) {
+  const todayDate = dateKey();
+  return await Day.findOneAndUpdate(
+    { date: todayDate },
+    { scans: data.scans, recommendations: data.recommendations },
+    { new: true, upsert: true }
+  );
 }
-export async function getHistory() { return readJson(historyPath, []); }
+
+export async function clearToday() {
+  const todayDate = dateKey();
+  return await Day.findOneAndUpdate(
+    { date: todayDate },
+    { scans: [], recommendations: {} },
+    { new: true }
+  );
+}
+
+export async function getHistory() {
+  const todayDate = dateKey();
+  // Return all past trading days excluding today
+  return await Day.find({ date: { $ne: todayDate } }).sort({ date: -1 });
+}
+
 export async function getDay(date) {
-  const today = await getToday();
-  if (!date || date === today.date) return today;
-  return (await getHistory()).find((item) => item.date === date) || null;
+  return await Day.findOne({ date });
 }
-export async function clearToday() { const day = blankDay(); await saveToday(day); return day; }
