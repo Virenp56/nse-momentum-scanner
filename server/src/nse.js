@@ -1,76 +1,62 @@
-// nse.js
+// src/nse.js
 import { chromium } from "playwright-extra";
-import stealthPlugin from "puppeteer-extra-plugin-stealth";
+import stealth from "puppeteer-extra-plugin-stealth";
 
-chromium.use(stealthPlugin());
+// Register stealth plugin to bypass anti-bot detection
+chromium.use(stealth());
 
-let browser;
+let browserInstance = null;
+let sharedContext = null;
+let sharedPage = null;
 
-async function getBrowser() {
-  if (browser && browser.isConnected()) return browser;
+export async function getBrowser() {
+  if (browserInstance && browserInstance.isConnected()) {
+    return browserInstance;
+  }
 
-  browser = await chromium.launch({
+  browserInstance = await chromium.launch({
     headless: true,
     args: [
-      "--disable-blink-features=AutomationControlled",
       "--no-sandbox",
       "--disable-setuid-sandbox",
-      "--disable-web-security",
+      "--disable-dev-shm-usage",
+      "--disable-accelerated-2d-canvas",
+      "--no-first-run",
+      "--no-zygote",
+      "--disable-gpu",
     ],
   });
 
-  return browser;
+  return browserInstance;
 }
 
-async function request(index) {
+async function getSharedPage() {
+  if (sharedPage && !sharedPage.isClosed()) return sharedPage;
+
   const b = await getBrowser();
-  const context = await b.newContext({
+  sharedContext = await b.newContext({
     userAgent:
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-    viewport: { width: 1366, height: 768 },
     extraHTTPHeaders: {
       "Accept-Language": "en-US,en;q=0.9",
     },
   });
 
-  const page = await context.newPage();
+  sharedPage = await sharedContext.newPage();
 
+  // Warmup: Load NSE homepage ONCE to capture session cookies
   try {
-    await page.goto("https://www.nseindia.com/market-data/top-gainers-losers", {
+    await sharedPage.goto("https://www.nseindia.com", {
       waitUntil: "domcontentloaded",
       timeout: 30000,
     });
-
-    await page.waitForTimeout(2500);
-
-    const data = await page.evaluate(async (targetIndex) => {
-      const res = await fetch(
-        `https://www.nseindia.com/api/live-analysis-variations?index=${targetIndex}`,
-        {
-          headers: {
-            accept: "application/json, text/plain, */*",
-            "sec-fetch-dest": "empty",
-            "sec-fetch-mode": "cors",
-            "sec-fetch-site": "same-origin",
-          },
-        }
-      );
-
-      if (!res.ok) {
-        throw new Error(`NSE HTTP ${res.status}: ${res.statusText}`);
-      }
-
-      return await res.json();
-    }, index);
-
-    return data;
-  } finally {
-    await context.close().catch(() => {});
+    await sharedPage.waitForTimeout(1500);
+  } catch (e) {
+    console.warn("NSE Warmup warning:", e.message);
   }
-}
 
-// Fetch 1-minute chart candles for technical indicator calculation
-// nse.js
+  return sharedPage;
+}
 
 function getTodayMarketOpenTimestamp() {
   const now = new Date();
@@ -86,55 +72,89 @@ function getTodayMarketOpenTimestamp() {
   return Math.floor(marketOpenIST.getTime() / 1000);
 }
 
+// 1. Fetch Chart Data (RSI, EMA, Volume Spikes)
 export async function fetchChartData(symbol) {
-  const b = await getBrowser();
-  const context = await b.newContext({
-    userAgent:
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-    extraHTTPHeaders: {
-      "Accept-Language": "en-US,en;q=0.9",
-    },
-  });
-  const page = await context.newPage();
-
   try {
-    // 1. Warm up session and acquire cookies from main NSE site
-    await page.goto(
-      `https://www.nseindia.com/get-quotes/equity?symbol=${encodeURIComponent(
-        symbol
-      )}`,
-      { waitUntil: "domcontentloaded", timeout: 20000 }
-    );
-    await page.waitForTimeout(1000);
-
+    const page = await getSharedPage();
     const toDate = Math.floor(Date.now() / 1000);
     const fromDate = getTodayMarketOpenTimestamp();
-    const encodedSym = encodeURIComponent(symbol + "-EQ");
-    const chartUrl = `https://charting.nseindia.com/v1/charts/symbolHistoricalData?token=2031&fromDate=${fromDate}&toDate=${toDate}&symbol=${encodedSym}&symbolType=Equity&chartType=I&timeInterval=1`;
 
-    // 2. Fetch using page.goto / response evaluation to bypass 403 blocks
-    const response = await page.goto(chartUrl, {
-      waitUntil: "domcontentloaded",
-      timeout: 15000,
-      referer: `https://www.nseindia.com/get-quotes/equity?symbol=${encodeURIComponent(
-        symbol
-      )}`,
-    });
+    const result = await page.evaluate(
+      async ({ sym, from, to }) => {
+        try {
+          const encodedSym = encodeURIComponent(sym + "-EQ");
+          const url = `https://charting.nseindia.com/v1/charts/symbolHistoricalData?token=2031&fromDate=${from}&toDate=${to}&symbol=${encodedSym}&symbolType=Equity&chartType=I&timeInterval=1`;
 
-    if (!response || !response.ok()) {
-      console.warn(`NSE HTTP ${response?.status()} for ${symbol}`);
-      return null;
-    }
+          const res = await fetch(url, {
+            method: "GET",
+            headers: {
+              Accept: "application/json, text/plain, */*",
+              Referer: `https://www.nseindia.com/get-quotes/equity?symbol=${encodeURIComponent(
+                sym
+              )}`,
+            },
+            credentials: "include",
+          });
 
-    const chartData = await response.json();
-    return chartData;
+          if (!res.ok) return null;
+          return await res.json();
+        } catch {
+          return null;
+        }
+      },
+      { sym: symbol, from: fromDate, to: toDate }
+    );
+
+    return result;
   } catch (err) {
     console.error(`Error fetching chart data for ${symbol}:`, err.message);
+    // Reset shared page instance to recover smoothly on the next iteration
+    sharedPage = null;
     return null;
-  } finally {
-    await context.close().catch(() => {});
   }
 }
 
-export const fetchGainers = () => request("gainers");
-export const fetchLosers = () => request("losers");
+// Helper to fetch JSON feeds inside browser evaluation
+async function fetchNseApiData(apiUrl) {
+  const page = await getSharedPage();
+  return await page.evaluate(async (url) => {
+    try {
+      const res = await fetch(url, {
+        headers: {
+          Accept: "application/json, text/plain, */*",
+        },
+        credentials: "include",
+      });
+      if (!res.ok) return null;
+      return await res.json();
+    } catch {
+      return null;
+    }
+  }, apiUrl);
+}
+
+// 2. Fetch Gainers Feed
+export async function fetchGainers() {
+  try {
+    const data = await fetchNseApiData(
+      "https://www.nseindia.com/api/live-analysis-variations?index=gainers"
+    );
+    return data || {};
+  } catch (e) {
+    console.error("Failed to fetch gainers:", e.message);
+    return {};
+  }
+}
+
+// 3. Fetch Losers Feed
+export async function fetchLosers() {
+  try {
+    const data = await fetchNseApiData(
+      "https://www.nseindia.com/api/live-analysis-variations?index=losers"
+    );
+    return data || {};
+  } catch (e) {
+    console.error("Failed to fetch losers:", e.message);
+    return {};
+  }
+}
