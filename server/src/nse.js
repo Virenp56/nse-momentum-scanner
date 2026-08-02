@@ -2,7 +2,6 @@
 import { chromium } from "playwright-extra";
 import stealth from "puppeteer-extra-plugin-stealth";
 
-// Register stealth plugin to bypass anti-bot detection
 chromium.use(stealth());
 
 let browserInstance = null;
@@ -30,7 +29,7 @@ export async function getBrowser() {
   return browserInstance;
 }
 
-async function getSharedPage() {
+export async function getSharedPage() {
   if (sharedPage && !sharedPage.isClosed()) return sharedPage;
 
   const b = await getBrowser();
@@ -44,7 +43,7 @@ async function getSharedPage() {
 
   sharedPage = await sharedContext.newPage();
 
-  // Warmup: Load NSE homepage ONCE to capture session cookies
+  // Warmup NSE cookies once
   try {
     await sharedPage.goto("https://www.nseindia.com", {
       waitUntil: "domcontentloaded",
@@ -72,14 +71,65 @@ function getTodayMarketOpenTimestamp() {
   return Math.floor(marketOpenIST.getTime() / 1000);
 }
 
-// 1. Fetch Chart Data (RSI, EMA, Volume Spikes)
+// 1. Fetch Detailed Stock Quote Payload
+export async function fetchGetQuoteData(symbol) {
+  try {
+    const page = await getSharedPage();
+    return await page.evaluate(async (sym) => {
+      try {
+        const url = `https://www.nseindia.com/api/NextApi/apiClient/GetQuoteApi?functionName=getSymbolData&marketType=N&series=EQ&symbol=${encodeURIComponent(
+          sym
+        )}`;
+        const res = await fetch(url, {
+          headers: { Accept: "application/json, text/plain, */*" },
+          credentials: "include",
+        });
+        if (!res.ok) return null;
+        const data = await res.json();
+        return data?.equityResponse?.[0] || null;
+      } catch {
+        return null;
+      }
+    }, symbol);
+  } catch (err) {
+    console.warn(`Quote fetch error for ${symbol}:`, err.message);
+    sharedPage = null;
+    return null;
+  }
+}
+
+// 2. Fetch Market Indices Performance (Nifty 50 + Sectoral Indices)
+export async function fetchAllIndices() {
+  try {
+    const page = await getSharedPage();
+    return await page.evaluate(async () => {
+      try {
+        const res = await fetch("https://www.nseindia.com/api/allIndices", {
+          headers: { Accept: "application/json, text/plain, */*" },
+          credentials: "include",
+        });
+        if (!res.ok) return [];
+        const json = await res.json();
+        return json?.data || [];
+      } catch {
+        return [];
+      }
+    });
+  } catch (err) {
+    console.warn("Error fetching market indices:", err.message);
+    sharedPage = null;
+    return [];
+  }
+}
+
+// 3. Fetch Historical Minute Candle Chart Data
 export async function fetchChartData(symbol) {
   try {
     const page = await getSharedPage();
     const toDate = Math.floor(Date.now() / 1000);
     const fromDate = getTodayMarketOpenTimestamp();
 
-    const result = await page.evaluate(
+    return await page.evaluate(
       async ({ sym, from, to }) => {
         try {
           const encodedSym = encodeURIComponent(sym + "-EQ");
@@ -104,25 +154,20 @@ export async function fetchChartData(symbol) {
       },
       { sym: symbol, from: fromDate, to: toDate }
     );
-
-    return result;
   } catch (err) {
     console.error(`Error fetching chart data for ${symbol}:`, err.message);
-    // Reset shared page instance to recover smoothly on the next iteration
     sharedPage = null;
     return null;
   }
 }
 
-// Helper to fetch JSON feeds inside browser evaluation
+// Helper to fetch live scan arrays
 async function fetchNseApiData(apiUrl) {
   const page = await getSharedPage();
   return await page.evaluate(async (url) => {
     try {
       const res = await fetch(url, {
-        headers: {
-          Accept: "application/json, text/plain, */*",
-        },
+        headers: { Accept: "application/json, text/plain, */*" },
         credentials: "include",
       });
       if (!res.ok) return null;
@@ -133,7 +178,6 @@ async function fetchNseApiData(apiUrl) {
   }, apiUrl);
 }
 
-// 2. Fetch Gainers Feed
 export async function fetchGainers() {
   try {
     const data = await fetchNseApiData(
@@ -146,7 +190,6 @@ export async function fetchGainers() {
   }
 }
 
-// 3. Fetch Losers Feed
 export async function fetchLosers() {
   try {
     const data = await fetchNseApiData(

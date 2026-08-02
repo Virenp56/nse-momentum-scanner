@@ -1,35 +1,25 @@
-// recommendations.js
-import { fetchChartData } from "./nse.js";
+// src/recommendations.js
+import { fetchChartData, fetchGetQuoteData, fetchAllIndices } from "./nse.js";
 
-const asNum = (value) => Number(String(value ?? 0).replace(/,/g, "")) || 0;
-const symbolOf = (row) =>
-  row.symbol ||
-  row.meta?.symbol ||
-  row.companyName ||
-  row.identifier ||
-  "Unknown";
-const changeOf = (row) =>
-  asNum(row.pChange ?? row.perChange ?? row.percentChange ?? row.change);
-const volumeOf = (row) =>
-  asNum(row.totalTradedVolume ?? row.volume ?? row.totalTradedValue ?? 0);
-const rankOf = (row, index) => asNum(row.rank) || index + 1;
+/**
+ * 14-Period RSI Calculation
+ */
+function calculateRSI(closes, period = 14) {
+  if (!closes || closes.length <= period) return 50;
+  let gains = 0;
+  let losses = 0;
 
-const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
-function calculateRSI(prices, period = 14) {
-  if (!prices || prices.length <= period) return 50;
-  let gains = 0,
-    losses = 0;
   for (let i = 1; i <= period; i++) {
-    const diff = prices[i] - prices[i - 1];
+    const diff = closes[i] - closes[i - 1];
     if (diff >= 0) gains += diff;
     else losses -= diff;
   }
+
   let avgGain = gains / period;
   let avgLoss = losses / period;
 
-  for (let i = period + 1; i < prices.length; i++) {
-    const diff = prices[i] - prices[i - 1];
+  for (let i = period + 1; i < closes.length; i++) {
+    const diff = closes[i] - closes[i - 1];
     if (diff >= 0) {
       avgGain = (avgGain * (period - 1) + diff) / period;
       avgLoss = (avgLoss * (period - 1)) / period;
@@ -38,245 +28,331 @@ function calculateRSI(prices, period = 14) {
       avgLoss = (avgLoss * (period - 1) - diff) / period;
     }
   }
+
   if (avgLoss === 0) return 100;
   const rs = avgGain / avgLoss;
-  return Number((100 - 100 / (1 + rs)).toFixed(2));
+  return 100 - 100 / (1 + rs);
 }
 
-function calculateEMA(prices, period) {
-  if (!prices || prices.length < period) return prices?.at(-1) || 0;
+/**
+ * Exponential Moving Average (EMA) Calculation
+ */
+function calculateEMA(closes, period) {
+  if (!closes || closes.length < period) return null;
   const k = 2 / (period + 1);
-  let ema = prices.slice(0, period).reduce((a, b) => a + b, 0) / period;
-  for (let i = period; i < prices.length; i++) {
-    ema = prices[i] * k + ema * (1 - k);
+  let ema = closes.slice(0, period).reduce((a, b) => a + b, 0) / period;
+  for (let i = period; i < closes.length; i++) {
+    ema = closes[i] * k + ema * (1 - k);
   }
-  return Number(ema.toFixed(2));
+  return ema;
 }
 
-function normalise(rows, category) {
-  let candidate = [];
-  if (Array.isArray(rows)) {
-    candidate = rows;
-  } else if (category && rows?.[category]) {
-    candidate = Array.isArray(rows[category]?.data)
-      ? rows[category].data
-      : Array.isArray(rows[category])
-      ? rows[category]
-      : [];
-  } else if (Array.isArray(rows?.data)) {
-    candidate = rows.data;
-  } else if (Array.isArray(rows?.NIFTY?.data)) {
-    candidate = rows.NIFTY.data;
-  }
+/**
+ * Full 10-Factor Evaluation with Continuous Metrics
+ */
+async function evaluateCandidate(candidate, scansData, totalScans, indexMap) {
+  const { symbol } = candidate;
 
-  const list = Array.isArray(candidate) ? candidate : [];
-
-  // Extract up to 20 candidates per segment
-  return list.slice(0, 20).map((row, index) => ({
-    symbol: symbolOf(row),
-    rank: rankOf(row, index),
-    change: changeOf(row),
-    volume: volumeOf(row),
-    raw: row,
-  }));
-}
-
-const rising = (values, direction = 1) => {
-  if (values.length < 2) return 0.5;
-  const steps = values
-    .slice(1)
-    .map((value, index) => direction * (value - values[index]));
-  const improvingSteps = steps.filter((step) => step > 0).length;
-  return improvingSteps === steps.length
-    ? 1
-    : improvingSteps / (steps.length * 2);
-};
-
-const chartCache = new Map();
-
-async function getCachedChartData(symbol) {
-  if (chartCache.has(symbol)) return chartCache.get(symbol);
   try {
-    const data = await fetchChartData(symbol);
-    chartCache.set(symbol, data);
-    return data;
-  } catch (err) {
-    console.error(`Skipped live charts for ${symbol} (HTTP 403/Error)`);
-    return null;
-  }
-}
+    // -------------------------------------------------------------
+    // FACTOR 1: Scan Appearance (15%)
+    // -------------------------------------------------------------
+    const appearances = scansData.filter((s) =>
+      s.symbols.includes(symbol)
+    ).length;
+    const appearanceScore = (appearances / Math.max(totalScans, 1)) * 100;
 
-async function calculate(scans, side, category = null) {
-  const records = new Map();
-  scans.forEach((scan) => {
-    const rawData = scan[side];
-    normalise(rawData, category).forEach((stock) => {
-      if (!records.has(stock.symbol)) records.set(stock.symbol, []);
-      records.get(stock.symbol).push({ ...stock, time: scan.time });
-    });
-  });
+    // -------------------------------------------------------------
+    // FACTOR 2: Current & Max Streak Persistence (10%)
+    // -------------------------------------------------------------
+    let currentStreak = 0;
+    for (let i = scansData.length - 1; i >= 0; i--) {
+      if (scansData[i].symbols.includes(symbol)) currentStreak++;
+      else break;
+    }
 
-  const total = scans.length || 1;
-  const candidateList = [...records.entries()].map(([symbol, points]) => {
-    const ranks = points.map((p) => p.rank);
-    const changes = points.map((p) => Math.abs(p.change));
-    const volumes = points.map((p) => p.volume);
-
-    const appearance = points.length / total;
-    const averageRank = ranks.reduce((a, b) => a + b, 0) / ranks.length;
-    const rankScore = Math.max(0, (21 - averageRank) / 20);
-    const momentum = rising(changes);
-    const volumeGrowth = rising(volumes);
-    const improvement = rising(ranks, -1);
-
-    const baseScore =
-      appearance * 0.35 +
-      rankScore * 0.2 +
-      momentum * 0.2 +
-      volumeGrowth * 0.15 +
-      improvement * 0.1;
-
-    const latest = points.at(-1);
-
-    return {
-      symbol,
-      points,
-      ranks,
-      changes,
-      volumes,
-      appearance,
-      averageRank,
-      baseScore,
-      latest,
-    };
-  });
-
-  candidateList.sort((a, b) => b.baseScore - a.baseScore);
-
-  // Filter out upper circuit risks (>19% gains)
-  const filteredCandidates = candidateList.filter(
-    (c) => c.latest.change < 19.0
-  );
-
-  // Take TOP 10 candidates
-  const top10Candidates = filteredCandidates.slice(0, 10);
-  const verifiedResults = [];
-
-  for (const candidate of top10Candidates) {
-    let techScore = 0.5; // Default neutral score
-    let rsi = 50;
-    let ema9 = 0;
-    let ema21 = 0;
-    let isBullishEma = false;
-    let hasVolumeSpike = false;
-
-    await delay(1200); // 500ms delay to avoid rate limiting
-
-    try {
-      const chartRes = await getCachedChartData(candidate.symbol);
-
-      if (
-        chartRes &&
-        Array.isArray(chartRes.data) &&
-        chartRes.data.length > 20
-      ) {
-        const closes = chartRes.data.map(
-          (tick) => tick.close || tick[4] || tick[1]
-        );
-        const minuteVolumes = chartRes.data.map(
-          (tick) => tick.volume || tick[5] || 0
-        );
-
-        rsi = calculateRSI(closes, 14);
-        ema9 = calculateEMA(closes, 9);
-        ema21 = calculateEMA(closes, 21);
-
-        isBullishEma = ema9 > ema21;
-        const isRsiOptimal = rsi >= 55 && rsi <= 75;
-
-        if (minuteVolumes.length >= 20) {
-          const recentVol = minuteVolumes.at(-1);
-          const avgVol =
-            minuteVolumes.slice(-20).reduce((a, b) => a + b, 0) / 20;
-          hasVolumeSpike = avgVol > 0 && recentVol > 1.5 * avgVol;
-        }
-
-        if (isBullishEma && isRsiOptimal) {
-          techScore = hasVolumeSpike ? 1.0 : 0.85;
-        } else if (isBullishEma || isRsiOptimal) {
-          techScore = 0.65;
-        } else if (rsi > 80) {
-          techScore = 0.2;
-        }
+    let maxStreak = 0;
+    let tempStreak = 0;
+    scansData.forEach((s) => {
+      if (s.symbols.includes(symbol)) {
+        tempStreak++;
+        if (tempStreak > maxStreak) maxStreak = tempStreak;
+      } else {
+        tempStreak = 0;
       }
-    } catch (err) {
-      console.error(
-        `Skipped live charts for ${candidate.symbol}, using scan score fallback.`
+    });
+
+    const persistenceScore = Math.min(
+      (currentStreak / 3) * 60 + (maxStreak / totalScans) * 40,
+      100
+    );
+
+    // -------------------------------------------------------------
+    // FACTOR 3: Smooth Rank Progression Trend (10%)
+    // -------------------------------------------------------------
+    const rankHistory = scansData
+      .map((s) => s.symbols.indexOf(symbol))
+      .filter((r) => r !== -1);
+
+    let rankImprovementScore = 50;
+    if (rankHistory.length > 1) {
+      let positiveMoves = 0;
+      for (let i = 1; i < rankHistory.length; i++) {
+        if (rankHistory[i] < rankHistory[i - 1]) positiveMoves++;
+      }
+      const consistencyRatio = positiveMoves / (rankHistory.length - 1);
+      const overallDelta = rankHistory[0] - rankHistory[rankHistory.length - 1];
+      rankImprovementScore = Math.min(
+        Math.max(50 + consistencyRatio * 30 + overallDelta * 5, 0),
+        100
       );
     }
 
-    // Calculate final confidence rating
-    const finalConfidence = Math.round(
-      Math.min(100, 100 * (candidate.baseScore * 0.7 + techScore * 0.3))
+    // -------------------------------------------------------------
+    // FACTOR 4: Price Velocity / Rate of Change (10%)
+    // -------------------------------------------------------------
+    let priceVelocityScore = 50;
+    const recentScansWithSymbol = scansData.filter((s) =>
+      s.symbols.includes(symbol)
     );
+    if (recentScansWithSymbol.length >= 2) {
+      const latestScanPos =
+        recentScansWithSymbol[recentScansWithSymbol.length - 1];
+      const prevScanPos =
+        recentScansWithSymbol[recentScansWithSymbol.length - 2];
+      const pChangeLatest = latestScanPos.pChangeMap.get(symbol) || 0;
+      const pChangePrev = prevScanPos.pChangeMap.get(symbol) || 0;
+      const velocityDelta = pChangeLatest - pChangePrev; // Intraday acceleration
+      priceVelocityScore = Math.min(Math.max(50 + velocityDelta * 20, 0), 100);
+    }
 
-    const reasons = [
-      `Appeared in ${candidate.points.length} of ${total} scans`,
-      candidate.averageRank <= 5
-        ? `Strong average rank: #${candidate.averageRank.toFixed(1)}`
-        : `Average rank: #${candidate.averageRank.toFixed(1)}`,
-      isBullishEma ? "EMA Trend: Bullish (EMA9 > EMA21)" : "EMA Trend: Neutral",
-      rsi >= 55 && rsi <= 75
-        ? `Optimal RSI Momentum (${rsi})`
-        : `RSI Level: ${rsi}`,
-      ...(hasVolumeSpike ? ["Intraday Volume Spike Detected"] : []),
-    ];
+    // -------------------------------------------------------------
+    // FACTOR 5: Rolling Average Volume Spike (10%)
+    // -------------------------------------------------------------
+    let volumeScore = 50;
+    const historicalVolumes = scansData
+      .map((s) => s.volumeMap.get(symbol))
+      .filter((v) => v !== undefined && v > 0);
 
-    const signal =
-      finalConfidence >= 80
-        ? `Strong ${side === "gainers" ? "Buy" : "Sell"}`
-        : finalConfidence >= 60
-        ? side === "gainers"
-          ? "Buy"
-          : "Sell"
-        : "Watch";
+    if (historicalVolumes.length >= 2) {
+      const currentVol = historicalVolumes[historicalVolumes.length - 1];
+      const pastVolumes = historicalVolumes.slice(
+        0,
+        historicalVolumes.length - 1
+      );
+      const rollingAvgVol =
+        pastVolumes.reduce((a, b) => a + b, 0) / pastVolumes.length;
 
-    verifiedResults.push({
-      symbol: candidate.symbol,
-      side: side === "gainers" ? "buy" : "sell",
-      signal,
-      confidence: finalConfidence,
-      reasons,
-      rsi,
-      ema9,
-      ema21,
-      currentRank: candidate.latest.rank,
-      currentChange: candidate.latest.change,
-      rankTrend: candidate.ranks,
-      changeTrend: candidate.points.map((p) => p.change),
-      volumeTrend: candidate.volumes,
-      raw: candidate.latest.raw,
-    });
+      const volumeRatio = rollingAvgVol > 0 ? currentVol / rollingAvgVol : 1;
+      volumeScore = Math.min(Math.max((volumeRatio - 1) * 50 + 50, 0), 100);
+    }
+
+    // -------------------------------------------------------------
+    // FETCH HEAVY LIVE DATA FOR SHORTLISTED CANDIDATES ONLY
+    // -------------------------------------------------------------
+    const [chartData, quotePayload] = await Promise.all([
+      fetchChartData(symbol).catch(() => null),
+      fetchGetQuoteData(symbol).catch(() => null),
+    ]);
+
+    const meta = quotePayload?.metaData || {};
+    const tradeInfo = quotePayload?.tradeInfo || {};
+    const secInfo = quotePayload?.secInfo || {};
+
+    const lastPrice = meta?.closePrice || tradeInfo?.lastPrice || 0;
+    const vwap = meta?.averagePrice || 0;
+    const dayHigh = meta?.dayHigh || 0;
+    const dayLow = meta?.dayLow || 0;
+    const stockPChange = meta?.pChange || candidate.latestPChange || 0;
+    const delPct = parseFloat(tradeInfo?.deliveryToTradedQuantity || 0);
+
+    // -------------------------------------------------------------
+    // FACTOR 6: Distance-Based Continuous VWAP Score (10%)
+    // -------------------------------------------------------------
+    let vwapScore = 0;
+    if (lastPrice > 0 && vwap > 0) {
+      const vwapDistancePct = ((lastPrice - vwap) / vwap) * 100;
+      if (vwapDistancePct < 0) {
+        vwapScore = 0; // Below VWAP
+      } else if (vwapDistancePct >= 0 && vwapDistancePct <= 2.5) {
+        vwapScore = 100; // Sweet spot: Above VWAP but not overextended
+      } else {
+        vwapScore = Math.max(100 - (vwapDistancePct - 2.5) * 20, 30); // Overextended penalty
+      }
+    }
+
+    // -------------------------------------------------------------
+    // FACTOR 7: Near Day High Proximity (5%)
+    // -------------------------------------------------------------
+    let nearHighScore = 50;
+    if (dayHigh > dayLow && dayHigh > 0) {
+      const proximity = ((lastPrice - dayLow) / (dayHigh - dayLow)) * 100;
+      nearHighScore = Math.min(Math.max(proximity, 0), 100);
+    }
+
+    // -------------------------------------------------------------
+    // FACTOR 8 & 9: True Relative Strength vs NIFTY & Sector (20%)
+    // -------------------------------------------------------------
+    const niftyPChange = indexMap.get("NIFTY 50") || 0;
+    const sectorName = (secInfo?.pdSectorInd || "").trim();
+    const sectorPChange = indexMap.get(sectorName) || niftyPChange;
+
+    const rsNiftyDelta = stockPChange - niftyPChange;
+    const rsSectorDelta = stockPChange - sectorPChange;
+
+    const rsNiftyScore = Math.min(Math.max(50 + rsNiftyDelta * 15, 0), 100);
+    const rsSectorScore = Math.min(Math.max(50 + rsSectorDelta * 15, 0), 100);
+
+    // -------------------------------------------------------------
+    // FACTOR 10: Technical RSI & EMA Trend (10%)
+    // -------------------------------------------------------------
+    let technicalScore = 50;
+    if (
+      chartData &&
+      Array.isArray(chartData.data) &&
+      chartData.data.length > 14
+    ) {
+      const closes = chartData.data.map((c) => c[4]);
+      const currentRsi = calculateRSI(closes);
+
+      let rsiPart = 50;
+      if (currentRsi >= 55 && currentRsi <= 75) rsiPart = 100;
+      else if (currentRsi > 75) rsiPart = 60;
+      else rsiPart = 30;
+
+      const ema9 = calculateEMA(closes, 9);
+      const ema20 = calculateEMA(closes, 20);
+      const latestClose = closes[closes.length - 1];
+
+      let emaPart = 50;
+      if (ema9 && ema20 && latestClose > ema9 && ema9 > ema20) emaPart = 100;
+      else if (latestClose > ema20) emaPart = 70;
+      else emaPart = 20;
+
+      technicalScore = (rsiPart + emaPart) / 2;
+    }
+
+    // -------------------------------------------------------------
+    // FINAL WEIGHTED COMPOSITE SCORE
+    // -------------------------------------------------------------
+    const totalScore =
+      appearanceScore * 0.15 +
+      persistenceScore * 0.1 +
+      rankImprovementScore * 0.1 +
+      priceVelocityScore * 0.1 +
+      volumeScore * 0.1 +
+      vwapScore * 0.1 +
+      nearHighScore * 0.05 +
+      rsNiftyScore * 0.12 +
+      rsSectorScore * 0.08 +
+      technicalScore * 0.1;
+
+    return {
+      symbol,
+      score: Math.round(totalScore * 100) / 100,
+      lastPrice,
+      vwap,
+      dayHigh,
+      deliveryPct: delPct,
+      sector: sectorName || "GENERAL",
+      currentStreak,
+      maxStreak,
+    };
+  } catch (err) {
+    console.error(`Error calculating factors for ${symbol}:`, err.message);
+    return { symbol, score: 0 };
   }
-
-  // Return Top 3 calculated from the Top 10
-  return verifiedResults
-    .sort((a, b) => b.confidence - a.confidence)
-    .slice(0, 3);
 }
 
-export async function buildRecommendations(scans) {
-  chartCache.clear();
+/**
+ * Builds Top 3 F&O and Top 5 Overall Recommendations
+ */
+export async function buildRecommendations(scans = []) {
+  if (!scans || !Array.isArray(scans) || scans.length === 0) {
+    return { foTop3: [], overallTop3: [] };
+  }
 
-  const [foTop3, overallTop3] = await Promise.all([
-    calculate(scans, "gainers", "FOSec"),
-    calculate(scans, "gainers", "allSec"),
-  ]);
+  try {
+    const totalScans = scans.length;
+    const symbolMetricsMap = new Map();
 
-  return {
-    foTop3,
-    overallTop3,
-    buy: foTop3,
-    sell: [],
-  };
+    // Fetch Live Nifty and Sector Benchmark Indices
+    const indicesList = await fetchAllIndices().catch(() => []);
+    const indexMap = new Map();
+    if (Array.isArray(indicesList)) {
+      indicesList.forEach((idx) => {
+        if (idx?.key || idx?.index) {
+          indexMap.set((idx.key || idx.index).trim(), idx.pChange || 0);
+        }
+      });
+    }
+
+    // Process scan snapshots
+    const scansData = scans.map((scan) => {
+      const gainersList = scan?.gainers?.data || scan?.gainers || [];
+      const symbols = [];
+      const volumeMap = new Map();
+      const pChangeMap = new Map();
+
+      if (Array.isArray(gainersList)) {
+        gainersList.forEach((g) => {
+          const sym = g.symbol || g.symbolName;
+          if (sym) {
+            symbols.push(sym);
+            const vol = g.totalTradedVolume || g.volume || 0;
+            const pChange = g.pChange || g.perChange || 0;
+
+            volumeMap.set(sym, vol);
+            pChangeMap.set(sym, pChange);
+
+            if (!symbolMetricsMap.has(sym)) {
+              symbolMetricsMap.set(sym, {
+                symbol: sym,
+                appearances: 1,
+                latestPChange: pChange,
+              });
+            } else {
+              const existing = symbolMetricsMap.get(sym);
+              existing.appearances += 1;
+              existing.latestPChange = pChange;
+            }
+          }
+        });
+      }
+
+      return { time: scan.time, symbols, volumeMap, pChangeMap };
+    });
+
+    // -------------------------------------------------------------
+    // TWEAK: SHORTLIST CANDIDATES BEFORE HEAVY API CALLS
+    // Pre-sort by appearances & % change, then pick top 10 candidates
+    // -------------------------------------------------------------
+    const preShortlisted = Array.from(symbolMetricsMap.values())
+      .sort((a, b) => {
+        if (b.appearances !== a.appearances) {
+          return b.appearances - a.appearances;
+        }
+        return b.latestPChange - a.latestPChange;
+      })
+      .slice(0, 10); // Max 10 candidates evaluate live to save speed & rate limits
+
+    // Evaluate short-listed candidates in parallel
+    const evaluated = await Promise.all(
+      preShortlisted.map((cand) =>
+        evaluateCandidate(cand, scansData, totalScans, indexMap)
+      )
+    );
+
+    const ranked = evaluated
+      .filter((item) => item && item.score > 0)
+      .sort((a, b) => b.score - a.score);
+
+    return {
+      foTop3: ranked.slice(0, 3),
+      overallTop3: ranked.slice(0, 5),
+    };
+  } catch (err) {
+    console.error("Failed to build recommendations safely:", err.message);
+    return { foTop3: [], overallTop3: [] };
+  }
 }
