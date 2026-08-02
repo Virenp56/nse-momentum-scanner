@@ -287,39 +287,65 @@ export async function buildRecommendations(scans = []) {
       });
     }
 
-    // Process scan snapshots
-    const scansData = scans.map((scan) => {
-      const gainersList = scan?.gainers?.data || scan?.gainers || [];
+    const scansData = scans.map((scan, idx) => {
+      const gainerObj = scan?.gainers || {};
+
+      // Extract array from NIFTY, FOSec, or allSec dynamically
+      let gainersList = [];
+      if (Array.isArray(gainerObj.data)) {
+        gainersList = gainerObj.data;
+      } else if (gainerObj.NIFTY?.data && Array.isArray(gainerObj.NIFTY.data)) {
+        gainersList = gainerObj.NIFTY.data;
+      } else if (gainerObj.FOSec?.data && Array.isArray(gainerObj.FOSec.data)) {
+        gainersList = gainerObj.FOSec.data;
+      } else if (
+        gainerObj.allSec?.data &&
+        Array.isArray(gainerObj.allSec.data)
+      ) {
+        gainersList = gainerObj.allSec.data;
+      } else {
+        // Fallback: search all object keys for a nested .data array
+        for (const key of Object.keys(gainerObj)) {
+          if (key !== "legends" && Array.isArray(gainerObj[key]?.data)) {
+            gainersList = gainerObj[key].data;
+            break;
+          }
+        }
+      }
+
       const symbols = [];
       const volumeMap = new Map();
       const pChangeMap = new Map();
 
-      if (Array.isArray(gainersList)) {
-        gainersList.forEach((g) => {
-          const sym = g.symbol || g.symbolName;
-          if (sym) {
-            symbols.push(sym);
-            const vol = g.totalTradedVolume || g.volume || 0;
-            const pChange = g.pChange || g.perChange || 0;
+      gainersList.forEach((g) => {
+        const sym = g.symbol || g.symbolName || g.identifier;
+        if (sym) {
+          symbols.push(sym);
+          const vol = g.totalTradedVolume || g.volume || g.tradedQuantity || 0;
+          const pChange = g.pChange || g.perChange || g.netPrice || 0;
 
-            volumeMap.set(sym, vol);
-            pChangeMap.set(sym, pChange);
+          volumeMap.set(sym, vol);
+          pChangeMap.set(sym, pChange);
 
-            if (!symbolMetricsMap.has(sym)) {
-              symbolMetricsMap.set(sym, {
-                symbol: sym,
-                appearances: 1,
-                latestPChange: pChange,
-              });
-            } else {
-              const existing = symbolMetricsMap.get(sym);
-              existing.appearances += 1;
-              existing.latestPChange = pChange;
-            }
+          if (!symbolMetricsMap.has(sym)) {
+            symbolMetricsMap.set(sym, {
+              symbol: sym,
+              appearances: 1,
+              latestPChange: pChange,
+            });
+          } else {
+            const existing = symbolMetricsMap.get(sym);
+            existing.appearances += 1;
+            existing.latestPChange = pChange;
           }
-        });
-      }
+        }
+      });
 
+      console.log(
+        `🔍 [DEBUG] Scan ${idx + 1} (${scan.time || "N/A"}): Extracted ${
+          symbols.length
+        } gainer symbols.`
+      );
       return { time: scan.time, symbols, volumeMap, pChangeMap };
     });
 
