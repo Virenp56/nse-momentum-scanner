@@ -188,8 +188,6 @@ function Dashboard({ day, recommendations, time, next }) {
     : [];
   const overallTop3 = Array.isArray(recommendations?.overallTop3)
     ? recommendations.overallTop3.slice(0, 3)
-    : Array.isArray(recommendations?.buy)
-    ? recommendations.buy.slice(0, 3)
     : [];
 
   return (
@@ -242,7 +240,6 @@ function Dashboard({ day, recommendations, time, next }) {
         </div>
 
         <div className="dual-rec-container">
-          {/* F&O Top 3 Group */}
           <div className="rec-group">
             <div className="rec-group-title">
               <h3>F&O Top 3</h3>
@@ -257,7 +254,6 @@ function Dashboard({ day, recommendations, time, next }) {
             </div>
           </div>
 
-          {/* Overall Top 3 Group */}
           <div className="rec-group">
             <div className="rec-group-title">
               <h3>Overall Top 3</h3>
@@ -288,7 +284,7 @@ function History({ scans }) {
 
   if (!scans || scans.length === 0) {
     return (
-      <section className="card recommendations">
+      <section className="card history-card">
         <div className="section-heading">
           <div>
             <h2>Scan History</h2>
@@ -302,85 +298,84 @@ function History({ scans }) {
 
   const activeScan = scans.find((s) => s.time === selectedTime) || scans[scans.length - 1];
 
-  // Utility to extract Top 3 stocks from nested category arrays
-  const getCategoryTop3 = (categoryObj) => {
-    const rawList = categoryObj?.data || (Array.isArray(categoryObj) ? categoryObj : []);
-    return rawList.slice(0, 3).map((item) => ({
-      symbol: item.symbol || item.symbolName || item.identifier || '—',
-      change: Number(item.perChange || item.pChange || item.net_price || 0).toFixed(2),
-    }));
-  };
-
-  const foTop3 = getCategoryTop3(activeScan?.gainers?.FOSec);
-  const niftyTop3 = getCategoryTop3(activeScan?.gainers?.NIFTY);
+  // Extract recommendations generated specifically at this time slot
+  const recs = activeScan?.recommendations || {};
+  const foTop3 = Array.isArray(recs.foTop3) ? recs.foTop3.slice(0, 3) : [];
+  const overallTop3 = Array.isArray(recs.overallTop3) ? recs.overallTop3.slice(0, 3) : [];
 
   return (
     <section className="card history-card">
       <div className="section-heading">
         <div>
           <h2>Scan History</h2>
-          <span>Select a time slot to view snapshot top gainers</span>
+          <span>View momentum recommendations generated at each time slot</span>
         </div>
+        <span className="history-badge">{scans.length} Scans Saved</span>
       </div>
 
       {/* Time Slot Selector Chips */}
-      <div className="time-chips">
-        {scans.map((scan) => (
-          <button
-            key={scan.time}
-            className={`chip ${scan.time === activeScan?.time ? 'active' : ''}`}
-            onClick={() => setSelectedTime(scan.time)}
-          >
-            {scan.time}
-          </button>
-        ))}
+      <div className="time-chips-container">
+        <label className="time-chips-label">SELECT SCAN TIME:</label>
+        <div className="time-chips">
+          {scans.map((scan) => (
+            <button
+              key={scan.time}
+              className={`chip ${scan.time === activeScan?.time ? 'active' : ''}`}
+              onClick={() => setSelectedTime(scan.time)}
+            >
+              <span>{scan.time}</span>
+              {scan.time === activeScan?.time && <i className="chip-dot" />}
+            </button>
+          ))}
+        </div>
       </div>
 
-      {/* Top Stocks for Selected Time Slot */}
+      {/* Recommended Stocks for Selected Time Slot */}
       {activeScan && (
         <div className="history-details">
-          <div className="history-timestamp">
-            <h3>Snapshot Time: <b>{activeScan.time}</b></h3>
-            <small>{new Date(activeScan.timestamp).toLocaleTimeString('en-IN')}</small>
+          <div className="history-timestamp-bar">
+            <div>
+              <span className="label">EVALUATED TIME SLOT</span>
+              <h3>
+                <b>{activeScan.time} IST</b> Snapshot
+              </h3>
+            </div>
+            <span className="history-time-meta">
+              Captured: {new Date(activeScan.timestamp).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+            </span>
           </div>
 
           <div className="dual-rec-container">
-            {/* F&O Category Top 3 */}
+            {/* F&O Category Top 3 at Selected Time */}
             <div className="rec-group">
               <div className="rec-group-title">
                 <h3>F&O Top 3</h3>
-                <span className="tag fo-tag">Snapshot</span>
+                <span className="tag fo-tag">{activeScan.time} Slot</span>
               </div>
-              <div className="history-row-container">
+              <div className="recommend-grid">
                 {foTop3.length > 0 ? (
-                  foTop3.map((stock) => (
-                    <div key={`fo-hist-${stock.symbol}`} className="history-stock-row">
-                      <span className="stock-sym">({stock.symbol})</span>
-                      <span className="stock-val">→ {stock.change >= 0 ? '+' : ''}{stock.change}%</span>
-                    </div>
+                  foTop3.map((item) => (
+                    <Recommendation key={`hist-fo-${item.symbol}-${activeScan.time}`} item={item} />
                   ))
                 ) : (
-                  <Empty text="No F&O data available for this slot." />
+                  <Empty text={`No F&O recommendations analyzed for ${activeScan.time}.`} />
                 )}
               </div>
             </div>
 
-            {/* NIFTY 50 Category Top 3 */}
+            {/* Overall Category Top 3 at Selected Time */}
             <div className="rec-group">
               <div className="rec-group-title">
-                <h3>NIFTY 50 Top 3</h3>
-                <span className="tag overall-tag">Snapshot</span>
+                <h3>Overall Top 3</h3>
+                <span className="tag overall-tag">{activeScan.time} Slot</span>
               </div>
-              <div className="history-row-container">
-                {niftyTop3.length > 0 ? (
-                  niftyTop3.map((stock) => (
-                    <div key={`nifty-hist-${stock.symbol}`} className="history-stock-row">
-                      <span className="stock-sym">({stock.symbol})</span>
-                      <span className="stock-val">→ {stock.change >= 0 ? '+' : ''}{stock.change}%</span>
-                    </div>
+              <div className="recommend-grid">
+                {overallTop3.length > 0 ? (
+                  overallTop3.map((item) => (
+                    <Recommendation key={`hist-all-${item.symbol}-${activeScan.time}`} item={item} />
                   ))
                 ) : (
-                  <Empty text="No NIFTY data available for this slot." />
+                  <Empty text={`No overall recommendations analyzed for ${activeScan.time}.`} />
                 )}
               </div>
             </div>

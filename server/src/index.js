@@ -38,25 +38,32 @@ async function runScan(forcedTime) {
     const time = forcedTime || indiaTime();
     const day = await getToday();
     if (day.scans.some((scan) => scan.time === time)) return day;
+
     const [gainers, losers] = await Promise.all([
       fetchGainers(),
       fetchLosers(),
     ]);
-    day.scans.push({
+
+    // Construct scan object
+    const scanEntry = {
       time,
       timestamp: new Date().toISOString(),
       gainers,
       losers,
-    });
+    };
+
+    day.scans.push(scanEntry);
     day.scans.sort((a, b) => a.time.localeCompare(b.time));
-    if (
-      time === "11:00" ||
-      scanTimes.every((scheduledTime) =>
-        day.scans.some((scan) => scan.time === scheduledTime)
-      )
-    ) {
-      day.recommendations = await buildRecommendations(day.scans);
-    }
+
+    // Calculate recommendations for all accumulated scans up to this slot
+    const slotRecommendations = await buildRecommendations(day.scans);
+
+    // Attach evaluated recommendations to this scan slot
+    scanEntry.recommendations = slotRecommendations;
+
+    // Keep top-level recommendations updated with the latest slot
+    day.recommendations = slotRecommendations;
+
     await saveToday(day);
     return day;
   } finally {
@@ -118,7 +125,6 @@ app.use((err, _, res, __) => {
   res.status(500).json({ error: err.message || "Unexpected server error" });
 });
 
-// Single port declaration and MongoDB startup hook
 const port = process.env.PORT || 8080;
 
 connectDB()
