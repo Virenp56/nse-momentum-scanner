@@ -1,13 +1,16 @@
 @import url("https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&display=swap");
+
 :root {
   color: #f8fafc;
   background: #0f172a;
   font-family: Manrope, Arial, sans-serif;
   font-synthesis: none;
 }
+
 * {
   box-sizing: border-box;
 }
+
 body {
   margin: 0;
   min-width: 320px;
@@ -15,22 +18,26 @@ body {
     #0f172a;
   color: #f8fafc;
 }
+
 button {
   font: inherit;
   color: inherit;
   cursor: pointer;
 }
+
 .app-shell {
   width: min(100%, 1120px);
   margin: auto;
   padding: 23px 16px 40px;
 }
+
 header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   margin-bottom: 21px;
 }
+
 .eyebrow,
 .label {
   font-size: 10px;
@@ -39,6 +46,7 @@ header {
   color: #94a3b8;
   margin: 0 0 5px;
 }
+
 h1 {
   font-size: 23px;
   line-height: 1.15;
@@ -46,10 +54,12 @@ h1 {
   font-weight: 800;
   letter-spacing: -0.055em;
 }
+
 h1 em {
   color: #60a5fa;
   font-style: normal;
 }
+
 .icon-button {
   width: 39px;
   height: 39px;
@@ -58,9 +68,11 @@ h1 em {
   background: #1e293b;
   font-size: 23px;
 }
+
 .icon-button:hover {
   background: #334155;
 }
+
 nav {
   display: flex;
   gap: 5px;
@@ -70,6 +82,7 @@ nav {
   border-radius: 14px;
   margin-bottom: 18px;
 }
+
 nav button {
   flex: 1;
   border: 0;
@@ -80,11 +93,13 @@ nav button {
   font-weight: 700;
   font-size: 12px;
 }
+
 nav button.active {
   background: #3b82f6;
   color: #fff;
   box-shadow: 0 3px 10px #0f172a;
 }
+
 .card {
   background: linear-gradient(
     145deg,
@@ -95,61 +110,73 @@ nav button.active {
   border-radius: 18px;
   box-shadow: 0 15px 35px rgba(0, 0, 0, 0.12);
 }
+
 .status-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 10px;
 }
+
 .market {
   min-height: 112px;
   padding: 15px;
   display: flex;
   flex-direction: column;
 }
+
 .market strong {
   font-size: 15px;
   line-height: 1.25;
 }
+
 .market:first-child strong {
   color: #4ade80;
 }
+
 .market-time {
   font-family: "DM Mono", monospace;
   font-size: 10px;
   color: #94a3b8;
   margin-top: auto;
 }
+
 .progress {
   margin-top: 10px;
   padding: 16px;
 }
+
 .section-heading {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
 }
+
 .section-heading h2,
 .section-title h2 {
   font-size: 16px;
   margin: 0;
   letter-spacing: -0.03em;
 }
+
 .section-heading span,
 .section-title span {
   font-size: 11px;
   color: #94a3b8;
 }
+
 .section-heading > b {
   font-family: "DM Mono";
   font-size: 13px;
   color: #60a5fa;
 }
+
 .scan-steps {
   display: flex;
   justify-content: space-between;
   margin-top: 18px;
   position: relative;
 }
+
 .scan-steps:before {
   content: "";
   position: absolute;
@@ -159,6 +186,7 @@ nav button.active {
   right: 9%;
   top: 10px;
 }
+
 .scan-steps > div {
   position: relative;
   z-index: 1;
@@ -167,6 +195,7 @@ nav button.active {
   font-family: "DM Mono";
   font-size: 10px;
 }
+
 .scan-steps i {
   display: block;
   width: 21px;
@@ -178,104 +207,55 @@ nav button.active {
   line-height: 17px;
   margin: auto auto 5px;
 }
+
 .scan-steps .done {
   color: #d1fae5;
 }
+
 .scan-steps .done i {
   background: #22c55e;
   color: #052e16;
   border-color: #22c55e;
 }
-.two-column {
-  display: grid;
-  gap: 10px;
-  margin-top: 10px;
-}
-.stock-card {
-  padding: 16px;
-}
-.dot {
-  display: block;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  margin-top: 6px;
-}
-.dot.gain {
-  background: #22c55e;
-  box-shadow: 0 0 12px #22c55e;
-}
-.dot.loss {
-  background: #ef4444;
-  box-shadow: 0 0 12px #ef4444;
-}
-.stock-list {
-  margin-top: 11px;
-}
-.stock-row {
-  display: grid;
-  grid-template-columns: 26px 1fr auto;
-  align-items: center;
-  padding: 9px 0;
-  border-bottom: 1px solid #29384f;
-  font-size: 12px;
-}
-.stock-row:last-child {
-  border: 0;
-}
-.stock-row b {
-  font-size: 12px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 150px;
-}
-.rank {
-  color: #94a3b8;
-  font-family: "DM Mono";
-  font-size: 11px;
-}
-.positive {
-  color: #4ade80;
-  font-family: "DM Mono";
-  font-size: 11px;
-}
-.negative {
-  color: #fb7185;
-  font-family: "DM Mono";
-  font-size: 11px;
-}
+
 .recommendations {
   padding: 16px;
   margin-top: 10px;
 }
+
 .spark {
   color: #facc15;
   font-size: 20px;
 }
+
 .recommend-grid {
   display: grid;
   gap: 10px;
   margin-top: 13px;
 }
+
 .recommendation {
   padding: 14px;
   background: #142037;
   border: 1px solid #2c405c;
   border-radius: 14px;
 }
+
 .recommendation-top {
   display: flex;
   justify-content: space-between;
 }
+
 .recommendation h3 {
   margin: 7px 0 1px;
   font-size: 16px;
 }
+
 .recommendation small {
   color: #94a3b8;
   font-size: 10px;
 }
+
 .pill {
   display: inline-block;
   font-size: 9px;
@@ -285,30 +265,35 @@ nav button.active {
   padding: 4px 7px;
   letter-spacing: 0.05em;
 }
+
 .pill.gain {
   background: #14532d;
   color: #86efac;
 }
+
 .pill.loss {
   background: #7f1d1d;
   color: #fda4af;
 }
+
 .score {
   text-align: right;
   display: flex;
   flex-direction: column;
 }
+
 .score b {
   font: 800 24px "DM Mono";
   letter-spacing: -0.12em;
 }
+
 .score.gain b {
   color: #4ade80;
 }
+
 .score.loss b {
   color: #fb7185;
 }
-/* src/styles.css */
 
 .trends {
   margin: 12px 0 7px;
@@ -319,30 +304,27 @@ nav button.active {
   gap: 5px;
   color: #94a3b8;
   font-size: 9px;
-
-  /* FIX: Ensure container respects parent constraints */
-  min-width: 0; /* Allows flex/grid children to shrink below content size */
-  overflow: hidden; /* Prevents child elements from spilling out */
+  min-width: 0;
+  overflow: hidden;
 }
 
 .trends span {
   display: flex;
   justify-content: space-between;
   gap: 8px;
-  min-width: 0; /* Prevents span flex item from stretching container */
+  min-width: 0;
 }
 
 .trends b {
   font-family: "DM Mono", monospace;
   font-weight: 500;
   color: #cbd5e1;
-
-  /* FIX: Truncate trend text cleanly with ellipsis if too long */
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 100%;
 }
+
 .recommendation ul {
   padding: 0;
   margin: 0;
@@ -352,17 +334,20 @@ nav button.active {
   display: grid;
   gap: 4px;
 }
+
 .recommendation li:before {
   content: "✓";
   color: #60a5fa;
   margin-right: 6px;
 }
+
 .empty {
   font-size: 12px;
   color: #94a3b8;
   text-align: center;
   padding: 24px 8px;
 }
+
 .alert {
   display: flex;
   justify-content: space-between;
@@ -375,11 +360,13 @@ nav button.active {
   font-size: 12px;
   margin-bottom: 12px;
 }
+
 .alert button {
   border: 0;
   background: transparent;
   font-size: 18px;
 }
+
 .loading {
   min-height: 420px;
   display: grid;
@@ -387,6 +374,7 @@ nav button.active {
   color: #94a3b8;
   font-size: 13px;
 }
+
 footer {
   font-size: 10px;
   line-height: 1.5;
@@ -395,14 +383,16 @@ footer {
   margin: 28px auto 0;
   max-width: 500px;
 }
+
 .section-title {
   margin: 5px 0 16px;
 }
-.history-list {
+
+.settings {
   display: grid;
-  gap: 8px;
+  gap: 9px;
 }
-.history-list button,
+
 .action {
   background: #1e293b;
   border: 1px solid #2c405c;
@@ -410,63 +400,12 @@ footer {
   text-align: left;
   padding: 15px;
   display: grid;
-  grid-template-columns: 1fr auto 15px;
+  grid-template-columns: 32px 1fr 15px;
   align-items: center;
   gap: 8px;
-}
-.history-list button.selected {
-  border-color: #3b82f6;
-  background: #1e3a63;
-}
-.history-list b {
-  font-size: 13px;
-}
-.history-list span {
-  font-size: 11px;
-  color: #94a3b8;
-}
-.history-list i,
-.action i {
-  font-size: 23px;
-  color: #64748b;
-  font-style: normal;
-}
-.detail {
-  margin-top: 25px;
-}
-.detail > h2 {
-  font-size: 16px;
-}
-.scan-detail {
-  padding: 14px;
-  margin-top: 10px;
-}
-.scan-detail > h3 {
-  font-family: "DM Mono";
-  font-size: 14px;
-  margin: 0 0 10px;
-  color: #60a5fa;
-}
-.scan-detail > div {
-  display: grid;
-  gap: 8px;
-}
-.scan-detail .stock-card {
-  padding: 12px;
-  background: #172237;
-}
-.scan-detail .stock-card h2 {
-  font-size: 13px;
-}
-.settings {
-  display: grid;
-  gap: 9px;
-}
-.action {
-  grid-template-columns: 32px 1fr 15px;
-  padding: 15px;
   width: 100%;
 }
+
 .action > span {
   width: 29px;
   height: 29px;
@@ -477,72 +416,37 @@ footer {
   color: #93c5fd;
   font-size: 16px;
 }
+
 .action b {
   font-size: 13px;
 }
+
 .action small {
   display: block;
   color: #94a3b8;
   font-size: 10px;
   margin-top: 2px;
 }
+
 .action.primary {
   border-color: #2563eb;
   background: linear-gradient(100deg, #1d4ed8, #1e3a63);
 }
+
 .action.danger > span {
   color: #fda4af;
   background: #4c2333;
 }
+
 .action.danger b {
   color: #fda4af;
 }
+
 .action:disabled {
   opacity: 0.65;
   cursor: wait;
 }
-@media (min-width: 680px) {
-  .app-shell {
-    padding: 36px 25px;
-  }
-  .two-column {
-    grid-template-columns: 1fr 1fr;
-  }
-  .recommend-grid {
-    grid-template-columns: 1fr 1fr;
-  }
-  .scan-detail > div {
-    grid-template-columns: 1fr 1fr;
-  }
-  .stock-row b {
-    max-width: 200px;
-  }
-}
-@media (min-width: 960px) {
-  h1 {
-    font-size: 28px;
-  }
-  .status-grid {
-    grid-template-columns: repeat(2, 260px);
-  }
-  .market {
-    min-height: 105px;
-  }
-  .progress {
-    margin-top: -105px;
-    margin-left: 540px;
-    min-height: 105px;
-  }
-  .two-column {
-    margin-top: 16px;
-  }
-  .stock-card {
-    padding: 19px;
-  }
-  .recommendations {
-    margin-top: 16px;
-  }
-}
+
 /* Dual Recommendation Grid Styles */
 .dual-rec-container {
   display: grid;
@@ -586,7 +490,7 @@ footer {
   border: 1px solid rgba(250, 204, 21, 0.3);
 }
 
-/* Trading Levels Badge */
+/* Target Trading Levels */
 .target-levels {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
@@ -618,16 +522,10 @@ footer {
 .target-levels b.pos {
   color: #4ade80;
 }
+
 .target-levels b.neg {
   color: #fb7185;
 }
-
-@media (min-width: 768px) {
-  .dual-rec-container {
-    grid-template-columns: 1fr 1fr;
-  }
-}
-/* src/styles.css */
 
 /* Progress Banner Styles */
 .progress-banner {
@@ -664,7 +562,6 @@ footer {
   }
 }
 
-/* Animated Progress Bar Container */
 .progress-bar-container {
   width: 100%;
   height: 6px;
@@ -674,7 +571,6 @@ footer {
   position: relative;
 }
 
-/* Moving Glow Bar Animation */
 .progress-bar-fill {
   height: 100%;
   width: 40%;
@@ -693,5 +589,134 @@ footer {
   }
   100% {
     left: 100%;
+  }
+}
+
+/* -------------------------------------------------------------
+ * HISTORY TAB STYLES
+ * ------------------------------------------------------------- */
+.history-card {
+  padding: 16px;
+  margin-top: 10px;
+}
+
+.time-chips {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 16px 0;
+}
+
+.chip {
+  padding: 6px 14px;
+  background: #182337;
+  border: 1px solid #293a54;
+  border-radius: 20px;
+  color: #94a3b8;
+  cursor: pointer;
+  font-size: 12px;
+  font-family: "DM Mono", monospace;
+  font-weight: 500;
+  transition: all 0.2s ease;
+}
+
+.chip:hover {
+  background: #1e293b;
+  color: #f8fafc;
+}
+
+.chip.active {
+  background: #3b82f6;
+  border-color: #3b82f6;
+  color: #ffffff;
+  box-shadow: 0 2px 8px rgba(59, 130, 246, 0.4);
+}
+
+.history-timestamp {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 14px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #29384f;
+}
+
+.history-timestamp h3 {
+  font-size: 14px;
+  margin: 0;
+  color: #f8fafc;
+}
+
+.history-timestamp b {
+  color: #60a5fa;
+  font-family: "DM Mono", monospace;
+}
+
+.history-timestamp small {
+  color: #94a3b8;
+  font-family: "DM Mono", monospace;
+  font-size: 11px;
+}
+
+.history-row-container {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.history-stock-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 14px;
+  background: #142037;
+  border: 1px solid #2c405c;
+  border-radius: 10px;
+  font-family: "DM Mono", monospace;
+  font-size: 13px;
+}
+
+.stock-sym {
+  font-weight: bold;
+  color: #60a5fa;
+}
+
+.stock-val {
+  color: #4ade80;
+  font-weight: 600;
+}
+
+@media (min-width: 680px) {
+  .app-shell {
+    padding: 36px 25px;
+  }
+  .recommend-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (min-width: 768px) {
+  .dual-rec-container {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (min-width: 960px) {
+  h1 {
+    font-size: 28px;
+  }
+  .status-grid {
+    grid-template-columns: repeat(2, 260px);
+  }
+  .market {
+    min-height: 105px;
+  }
+  .progress {
+    margin-top: -105px;
+    margin-left: 540px;
+    min-height: 105px;
+  }
+  .recommendations {
+    margin-top: 16px;
   }
 }

@@ -20,7 +20,7 @@ function nextScan(scans) {
 export default function App() {
   const [day, setDay] = useState(null);
   const [recommendations, setRecommendations] = useState({});
-  const [page, setPage] = useState('home');
+  const [page, setPage] = useState('home'); // 'home' | 'history' | 'settings'
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [scanStatus, setScanStatus] = useState('');
@@ -50,7 +50,6 @@ export default function App() {
     return () => clearInterval(interval);
   }, [refresh]);
 
-  const latest = day?.scans?.at(-1);
   const next = nextScan(day?.scans || []);
 
   const manualScan = async () => {
@@ -118,9 +117,13 @@ export default function App() {
         </button>
       </header>
 
+      {/* Navigation Tabs */}
       <nav>
         <button className={page === 'home' ? 'active' : ''} onClick={() => setPage('home')}>
           Dashboard
+        </button>
+        <button className={page === 'history' ? 'active' : ''} onClick={() => setPage('history')}>
+          History
         </button>
         <button className={page === 'settings' ? 'active' : ''} onClick={() => setPage('settings')}>
           Settings
@@ -156,6 +159,8 @@ export default function App() {
           time={time}
           next={next}
         />
+      ) : page === 'history' ? (
+        <History scans={day?.scans || []} />
       ) : (
         <Settings
           busy={busy}
@@ -269,6 +274,120 @@ function Dashboard({ day, recommendations, time, next }) {
         </div>
       </section>
     </>
+  );
+}
+
+function History({ scans }) {
+  const [selectedTime, setSelectedTime] = useState(scans[0]?.time || null);
+
+  useEffect(() => {
+    if (scans.length > 0 && !selectedTime) {
+      setSelectedTime(scans[scans.length - 1].time);
+    }
+  }, [scans, selectedTime]);
+
+  if (!scans || scans.length === 0) {
+    return (
+      <section className="card recommendations">
+        <div className="section-heading">
+          <div>
+            <h2>Scan History</h2>
+            <span>Historical time-slot snapshots</span>
+          </div>
+        </div>
+        <Empty text="No scans recorded yet for today." />
+      </section>
+    );
+  }
+
+  const activeScan = scans.find((s) => s.time === selectedTime) || scans[scans.length - 1];
+
+  // Utility to extract Top 3 stocks from nested category arrays
+  const getCategoryTop3 = (categoryObj) => {
+    const rawList = categoryObj?.data || (Array.isArray(categoryObj) ? categoryObj : []);
+    return rawList.slice(0, 3).map((item) => ({
+      symbol: item.symbol || item.symbolName || item.identifier || '—',
+      change: Number(item.perChange || item.pChange || item.net_price || 0).toFixed(2),
+    }));
+  };
+
+  const foTop3 = getCategoryTop3(activeScan?.gainers?.FOSec);
+  const niftyTop3 = getCategoryTop3(activeScan?.gainers?.NIFTY);
+
+  return (
+    <section className="card history-card">
+      <div className="section-heading">
+        <div>
+          <h2>Scan History</h2>
+          <span>Select a time slot to view snapshot top gainers</span>
+        </div>
+      </div>
+
+      {/* Time Slot Selector Chips */}
+      <div className="time-chips">
+        {scans.map((scan) => (
+          <button
+            key={scan.time}
+            className={`chip ${scan.time === activeScan?.time ? 'active' : ''}`}
+            onClick={() => setSelectedTime(scan.time)}
+          >
+            {scan.time}
+          </button>
+        ))}
+      </div>
+
+      {/* Top Stocks for Selected Time Slot */}
+      {activeScan && (
+        <div className="history-details">
+          <div className="history-timestamp">
+            <h3>Snapshot Time: <b>{activeScan.time}</b></h3>
+            <small>{new Date(activeScan.timestamp).toLocaleTimeString('en-IN')}</small>
+          </div>
+
+          <div className="dual-rec-container">
+            {/* F&O Category Top 3 */}
+            <div className="rec-group">
+              <div className="rec-group-title">
+                <h3>F&O Top 3</h3>
+                <span className="tag fo-tag">Snapshot</span>
+              </div>
+              <div className="history-row-container">
+                {foTop3.length > 0 ? (
+                  foTop3.map((stock) => (
+                    <div key={`fo-hist-${stock.symbol}`} className="history-stock-row">
+                      <span className="stock-sym">({stock.symbol})</span>
+                      <span className="stock-val">→ {stock.change >= 0 ? '+' : ''}{stock.change}%</span>
+                    </div>
+                  ))
+                ) : (
+                  <Empty text="No F&O data available for this slot." />
+                )}
+              </div>
+            </div>
+
+            {/* NIFTY 50 Category Top 3 */}
+            <div className="rec-group">
+              <div className="rec-group-title">
+                <h3>NIFTY 50 Top 3</h3>
+                <span className="tag overall-tag">Snapshot</span>
+              </div>
+              <div className="history-row-container">
+                {niftyTop3.length > 0 ? (
+                  niftyTop3.map((stock) => (
+                    <div key={`nifty-hist-${stock.symbol}`} className="history-stock-row">
+                      <span className="stock-sym">({stock.symbol})</span>
+                      <span className="stock-val">→ {stock.change >= 0 ? '+' : ''}{stock.change}%</span>
+                    </div>
+                  ))
+                ) : (
+                  <Empty text="No NIFTY data available for this slot." />
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </section>
   );
 }
 
