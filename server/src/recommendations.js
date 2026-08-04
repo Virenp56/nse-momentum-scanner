@@ -45,20 +45,20 @@ function calculateEMA(closes, period) {
 }
 
 /**
- * Full 10-Factor Evaluation with Continuous Metrics
+ * Full 10-Factor Evaluation with Continuous Metrics & Optimized Weights
  */
 async function evaluateCandidate(candidate, scansData, totalScans, indexMap) {
   const { symbol } = candidate;
 
   try {
     // -------------------------------------------------------------
-    // FACTOR 1: Scan Appearance (15%)
+    // FACTOR 1: Scan Appearance (10%)
     // -------------------------------------------------------------
     const appearances = scansData.filter((s) => s.symbols.includes(symbol)).length;
     const appearanceScore = (appearances / Math.max(totalScans, 1)) * 100;
 
     // -------------------------------------------------------------
-    // FACTOR 2: Current & Max Streak Persistence (10%)
+    // FACTOR 2: Current & Max Streak Persistence (5%)
     // -------------------------------------------------------------
     let currentStreak = 0;
     for (let i = scansData.length - 1; i >= 0; i--) {
@@ -79,7 +79,7 @@ async function evaluateCandidate(candidate, scansData, totalScans, indexMap) {
     const persistenceScore = Math.min((currentStreak / 3) * 60 + (maxStreak / totalScans) * 40, 100);
 
     // -------------------------------------------------------------
-    // FACTOR 3: Smooth Rank Progression Trend (10%)
+    // FACTOR 3: Smooth Rank Progression Trend (5%)
     // -------------------------------------------------------------
     const rankHistory = scansData.map((s) => s.symbols.indexOf(symbol) + 1).filter((r) => r !== 0);
     let rankImprovementScore = 50;
@@ -114,7 +114,7 @@ async function evaluateCandidate(candidate, scansData, totalScans, indexMap) {
     }
 
     // -------------------------------------------------------------
-    // FACTOR 5: Rolling Average Volume Spike (10%)
+    // FACTOR 5: Rolling Average Volume Spike (15%)
     // -------------------------------------------------------------
     let volumeScore = 50;
     const historicalVolumes = scansData
@@ -149,6 +149,7 @@ async function evaluateCandidate(candidate, scansData, totalScans, indexMap) {
     const tradeInfo = quotePayload?.tradeInfo || {
       deliveryToTradedQuantity: 40.0,
       lastPrice: candidate.lastPrice || 1000,
+      totalTradedVolume: candidate.volume || 100000,
     };
 
     const secInfo = quotePayload?.secInfo || { pdSectorInd: "NIFTY IT" };
@@ -159,9 +160,10 @@ async function evaluateCandidate(candidate, scansData, totalScans, indexMap) {
     const dayLow = meta?.dayLow || 0;
     const stockPChange = meta?.pChange || candidate.latestPChange || 0;
     const delPct = parseFloat(tradeInfo?.deliveryToTradedQuantity || 0);
+    const totalTradedQty = tradeInfo?.totalTradedVolume || candidate.volume || 0;
 
     // -------------------------------------------------------------
-    // FACTOR 6: Distance-Based Continuous VWAP Score (10%)
+    // FACTOR 6: Distance-Based Continuous VWAP Score (15%)
     // -------------------------------------------------------------
     let vwapScore = 0;
     if (lastPrice > 0 && vwap > 0) {
@@ -180,7 +182,7 @@ async function evaluateCandidate(candidate, scansData, totalScans, indexMap) {
     }
 
     // -------------------------------------------------------------
-    // FACTOR 8 & 9: True Relative Strength vs NIFTY & Sector (20%)
+    // FACTOR 8 & 9: Dynamic Relative Strength vs NIFTY & Sector (25%)
     // -------------------------------------------------------------
     const niftyPChange = indexMap.get("NIFTY 50") || 0;
     const sectorName = (secInfo?.pdSectorInd || "").trim();
@@ -189,8 +191,9 @@ async function evaluateCandidate(candidate, scansData, totalScans, indexMap) {
     const rsNiftyDelta = stockPChange - niftyPChange;
     const rsSectorDelta = stockPChange - sectorPChange;
 
-    const rsNiftyScore = Math.min(Math.max(50 + rsNiftyDelta * 15, 0), 100);
-    const rsSectorScore = Math.min(Math.max(50 + rsSectorDelta * 15, 0), 100);
+    // Sharper scaling for negative deltas
+    const rsNiftyScore = Math.min(Math.max(rsNiftyDelta >= 0 ? 50 + rsNiftyDelta * 20 : 50 + rsNiftyDelta * 30, 0), 100);
+    const rsSectorScore = Math.min(Math.max(rsSectorDelta >= 0 ? 50 + rsSectorDelta * 20 : 50 + rsSectorDelta * 30, 0), 100);
 
     // -------------------------------------------------------------
     // FACTOR 10: Technical RSI & EMA Trend (10%)
@@ -223,22 +226,27 @@ async function evaluateCandidate(candidate, scansData, totalScans, indexMap) {
     }
 
     // -------------------------------------------------------------
-    // FINAL WEIGHTED COMPOSITE SCORE
+    // RE-BALANCED COMPOSITE SCORE
     // -------------------------------------------------------------
-    const totalScore =
-      appearanceScore * 0.15 +
-      persistenceScore * 0.10 +
-      rankImprovementScore * 0.10 +
+    let baseScore =
+      appearanceScore * 0.10 +
+      persistenceScore * 0.05 +
+      rankImprovementScore * 0.05 +
       priceVelocityScore * 0.10 +
-      volumeScore * 0.10 +
-      vwapScore * 0.10 +
+      volumeScore * 0.15 +
+      vwapScore * 0.15 +
       nearHighScore * 0.05 +
-      rsNiftyScore * 0.12 +
-      rsSectorScore * 0.08 +
+      rsNiftyScore * 0.15 +
+      rsSectorScore * 0.10 +
       technicalScore * 0.10;
 
-    const confidenceScore = `${Math.round(totalScore)}%`;
-    const signalText = totalScore >= 70 ? "STRONG BUY" : "BUY";
+    // Apply Liquidity Multiplier (Penalizes low volume candidates)
+    const minTradedQty = 250000; // Minimum 2.5 Lakh shares traded
+    const liquidityPenalty = totalTradedQty > 0 && totalTradedQty < minTradedQty ? 0.85 : 1.0;
+    const finalScore = baseScore * liquidityPenalty;
+
+    const confidenceScore = `${Math.round(finalScore)}%`;
+    const signalText = finalScore >= 70 ? "STRONG BUY" : "BUY";
 
     const reasons = [];
     reasons.push(`Appeared in ${appearances}/${totalScans} scans (${currentStreak} streak)`);
@@ -260,7 +268,7 @@ async function evaluateCandidate(candidate, scansData, totalScans, indexMap) {
       changeTrend: changeTrend.length > 0 ? changeTrend : [stockPChange],
       reasons: reasons.slice(0, 3),
       raw: { ltp: lastPrice, vwap, dayHigh, deliveryPct: delPct },
-      score: totalScore,
+      score: finalScore,
     };
   } catch (err) {
     console.error(`Error calculating factors for ${symbol}:`, err.message);
@@ -298,12 +306,13 @@ function extractCategoryScans(scans, categoryKey) {
         pChangeMap.set(sym, pChange);
 
         if (!symbolMap.has(sym)) {
-          symbolMap.set(sym, { symbol: sym, appearances: 1, latestPChange: pChange, lastPrice: ltp });
+          symbolMap.set(sym, { symbol: sym, appearances: 1, latestPChange: pChange, lastPrice: ltp, volume: vol });
         } else {
           const existing = symbolMap.get(sym);
           existing.appearances += 1;
           existing.latestPChange = pChange;
           if (ltp > 0) existing.lastPrice = ltp;
+          if (vol > 0) existing.volume = vol;
         }
       }
     });
@@ -346,7 +355,7 @@ export async function buildRecommendations(scans = []) {
       .filter((item) => item && item.score > 0)
       .sort((a, b) => b.score - a.score);
 
-    // 2. Extract & Rank Overall Stocks separately from NIFTY / allSec
+    // 2. Extract & Rank Overall Stocks separately from NIFTY
     const overallData = extractCategoryScans(scans, "NIFTY");
     const shortlistedOverall = overallData.candidates
       .sort((a, b) => b.appearances - a.appearances || b.latestPChange - a.latestPChange)
