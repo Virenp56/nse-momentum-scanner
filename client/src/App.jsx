@@ -3,7 +3,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { api } from './api';
 import { Empty, Recommendation } from './components';
 
-const SCAN_TIMES = ['09:30', '09:45', '10:00', '10:15', '10:30', '10:45', '11:00'];
+const SCAN_TIMES = ['11:00'];
 
 const clock = () =>
   new Date().toLocaleTimeString('en-IN', {
