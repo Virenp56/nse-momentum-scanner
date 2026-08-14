@@ -1,98 +1,88 @@
-// storage.js
-import mongoose from "mongoose";
+import fs from "fs/promises";
+import path from "path";
 
-const MONGO_URI =
-  process.env.MONGO_URL ||
-  process.env.DATABASE_URL ||
-  process.env.MONGO_PRIVATE_URL;
-
-let isConnected = false;
-
-export async function connectDB() {
-  if (isConnected) return;
-
-  if (!MONGO_URI) {
-    throw new Error(
-      "MongoDB Connection Error: Missing MONGO_URL environment variable on Railway!"
-    );
-  }
-
-  try {
-    mongoose.set("bufferCommands", false);
-
-    const db = await mongoose.connect(MONGO_URI, {
-      serverSelectionTimeoutMS: 5000,
-    });
-
-    isConnected = db.connections[0].readyState === 1;
-    console.log("Connected to MongoDB successfully");
-  } catch (err) {
-    console.error("Failed to connect to MongoDB:", err.message);
-    throw err;
-  }
-}
-
-const DaySchema = new mongoose.Schema(
-  {
-    date: { type: String, required: true, unique: true },
-    scans: { type: Array, default: [] },
-    recommendations: { type: Object, default: {} },
-    archived: { type: Boolean, default: false },
-  },
-  { timestamps: true }
-);
-
-const Day = mongoose.models.Day || mongoose.model("Day", DaySchema);
+const FILE_PATH = path.resolve(process.cwd(), "today.json");
 
 const dateKey = () =>
   new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(
     new Date()
   );
 
-export async function getToday() {
-  await connectDB();
-  const todayDate = dateKey();
-  let day = await Day.findOne({ date: todayDate });
+// Helper to create empty structure
+function createEmptyDay(date = dateKey()) {
+  return {
+    date,
+    scans: [],
+    recommendations: {},
+    archived: false,
+  };
+}
 
-  if (!day) {
-    day = await Day.create({
-      date: todayDate,
-      scans: [],
-      recommendations: {},
-      archived: false,
-    });
+// Helper to read and parse the file safely
+async function readDayFile() {
+  try {
+    const raw = await fs.readFile(FILE_PATH, "utf-8");
+    return JSON.parse(raw);
+  } catch (err) {
+    if (err.code === "ENOENT") {
+      const initialDay = createEmptyDay();
+      await writeDayFile(initialDay);
+      return initialDay;
+    }
+    console.error("Error reading today.json:", err.message);
+    return createEmptyDay();
+  }
+}
+
+// Helper to atomically/safely write to file
+async function writeDayFile(data) {
+  try {
+    await fs.writeFile(FILE_PATH, JSON.stringify(data, null, 2), "utf-8");
+    return data;
+  } catch (err) {
+    console.error("Error writing today.json:", err.message);
+    throw err;
+  }
+}
+
+export async function getToday() {
+  const todayDate = dateKey();
+  let day = await readDayFile();
+
+  // Reset file automatically if it holds data from a previous date
+  if (!day || day.date !== todayDate) {
+    day = createEmptyDay(todayDate);
+    await writeDayFile(day);
   }
 
   return day;
 }
 
 export async function saveToday(data) {
-  await connectDB();
   const todayDate = dateKey();
-  return await Day.findOneAndUpdate(
-    { date: todayDate },
-    { scans: data.scans, recommendations: data.recommendations },
-    { new: true, upsert: true }
-  );
+  const currentDay = await getToday();
+
+  const updatedDay = {
+    ...currentDay,
+    date: todayDate,
+    scans: data.scans || [],
+    recommendations: data.recommendations || {},
+  };
+
+  return await writeDayFile(updatedDay);
 }
 
 export async function clearToday() {
-  await connectDB();
   const todayDate = dateKey();
-  return await Day.findOneAndUpdate(
-    { date: todayDate },
-    { scans: [], recommendations: {} },
-    { new: true }
-  );
+  const resetDay = createEmptyDay(todayDate);
+  return await writeDayFile(resetDay);
 }
 
 export async function getDay(date) {
-  await connectDB();
-  return await Day.findOne({ date });
+  const day = await readDayFile();
+  return day.date === date ? day : null;
 }
 
 export async function getHistory() {
-  await connectDB();
-  const todayDate = dateKey();
-  return await Day.find({ date: { $ne: todayDate } }).sort({ date: -1 });
+  return [];
 }

@@ -1,10 +1,9 @@
-// src/index.js
 import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import cron from "node-cron";
 import { fetchGainers, fetchLosers } from "./nse.js";
-import { getToday, saveToday, clearToday, connectDB } from "./storage.js";
+import { getToday, saveToday, clearToday } from "./storage.js";
 import { buildRecommendations } from "./recommendations.js";
 
 const app = express();
@@ -119,15 +118,7 @@ app.use((err, _, res, __) => {
 
 const port = process.env.PORT || 8080;
 
-connectDB()
-  .then(() => {
-    app.listen(port, () =>
-      console.log(`NSE Momentum API listening on port ${port}`)
-    );
-  })
-  .catch((err) => {
-    console.error(
-      "Server startup failed due to DB connection error:",
-      err.message
-    );
-  });
+// Start server directly without database connection wait
+app.listen(port, () => {
+  console.log(`NSE Momentum API listening on port ${port}`);
+});
