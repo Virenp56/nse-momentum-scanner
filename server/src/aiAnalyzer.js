@@ -1,11 +1,14 @@
 // src/aiAnalyzer.js
-import { GoogleGenAI, Type } from "@google/genai";
-
-const apiKey = process.env.GEMINI_API_KEY;
-const ai = apiKey ? new GoogleGenAI({ apiKey }) : null;
+import { GoogleGenAI } from "@google/genai";
 
 export async function filterWithAI(candidates, marketContext = {}) {
-  if (!ai || !candidates || candidates.length === 0) return null;
+  const apiKey = process.env.GEMINI_API_KEY;
+
+  if (!apiKey || !candidates || candidates.length === 0) {
+    return null;
+  }
+
+  const ai = new GoogleGenAI({ apiKey });
 
   const candidateData = candidates.map((c) => ({
     symbol: c.symbol,
@@ -41,40 +44,35 @@ Instructions:
       model: "gemini-3.7-flash",
       input: prompt,
       response_format: {
-        type: "json_schema",
-        json_schema: {
-          name: "stock_recommendations",
-          schema: {
-            type: "array",
-            items: {
-              type: "object",
-              properties: {
-                symbol: { type: "string" },
-                confidence: { type: "string" },
-                signal: { type: "string" },
-                aiReasoning: {
-                  type: "array",
-                  items: { type: "string" },
-                },
+        type: "array",
+        schema: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              symbol: { type: "string" },
+              confidence: { type: "string" },
+              signal: { type: "string" },
+              aiReasoning: {
+                type: "array",
+                items: { type: "string" },
               },
-              required: ["symbol", "confidence", "signal", "aiReasoning"],
             },
+            required: ["symbol", "confidence", "signal", "aiReasoning"],
           },
         },
       },
     });
 
-    const parsedResults = JSON.parse(
-      interaction.output_text || interaction.text || "[]"
-    );
+    const output = interaction.output_text || interaction.text || "[]";
+    const cleanOutput = output.replace(/```json\n?|```/g, "").trim();
+    const parsedResults = JSON.parse(cleanOutput);
+
     return Array.isArray(parsedResults) && parsedResults.length > 0
       ? parsedResults
       : null;
   } catch (err) {
-    console.warn(
-      "AI Analysis bypassed (falling back to math rules):",
-      err.message
-    );
+    console.error("Error during AI analysis:", err.message);
     return null;
   }
 }
