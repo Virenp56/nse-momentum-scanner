@@ -11,7 +11,24 @@ app.use(cors({ origin: process.env.CLIENT_ORIGIN?.split(",") || "*" }));
 app.use(express.json());
 
 // 15-minute scheduled scan slots
-const scanTimes = ["11:00"];
+const scanTimes = [
+  "09:45",
+  "10:00",
+  "10:15",
+  "10:30",
+  "10:45",
+  "11:00",
+  "11:15",
+  "11:30",
+  "11:45",
+  "12:00",
+  "12:15",
+  "12:30",
+  "12:45",
+  "13:00",
+  "13:15",
+  "13:30",
+];
 let scanning = false;
 
 const indiaTime = () =>

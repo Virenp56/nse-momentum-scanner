@@ -3,7 +3,24 @@ import { useCallback, useEffect, useState } from 'react';
 import { api } from './api';
 import { Empty, Recommendation } from './components';
 
-const SCAN_TIMES = ['11:00'];
+const SCAN_TIMES = [
+  "09:45",
+  "10:00",
+  "10:15",
+  "10:30",
+  "10:45",
+  "11:00",
+  "11:15",
+  "11:30",
+  "11:45",
+  "12:00",
+  "12:15",
+  "12:30",
+  "12:45",
+  "13:00",
+  "13:15",
+  "13:30",
+];
 
 const clock = () =>
   new Date().toLocaleTimeString('en-IN', {
@@ -20,7 +37,7 @@ function nextScan(scans) {
 export default function App() {
   const [day, setDay] = useState(null);
   const [recommendations, setRecommendations] = useState({});
-  const [page, setPage] = useState('home'); // 'home' | 'history' | 'settings'
+  const [page, setPage] = useState('home');
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [scanStatus, setScanStatus] = useState('');
@@ -117,7 +134,6 @@ export default function App() {
         </button>
       </header>
 
-      {/* Navigation Tabs */}
       <nav>
         <button className={page === 'home' ? 'active' : ''} onClick={() => setPage('home')}>
           Dashboard
@@ -130,7 +146,6 @@ export default function App() {
         </button>
       </nav>
 
-      {/* Dynamic Scan Progress Banner */}
       {busy && (
         <div className="progress-banner">
           <div className="progress-text">
@@ -178,6 +193,61 @@ export default function App() {
   );
 }
 
+function StrategyGuide() {
+  const [open, setOpen] = useState(true);
+
+  return (
+    <section className="card strategy-card">
+      <div className="section-heading strategy-toggle" onClick={() => setOpen(!open)}>
+        <div>
+          <span className="eyebrow strategy-badge">EXECUTION PLAYBOOK</span>
+          <h2>Intraday Strategy & Rules</h2>
+        </div>
+        <button className="collapse-btn">{open ? '▲ Hide' : '▼ View Strategy'}</button>
+      </div>
+
+      {open && (
+        <div className="strategy-body">
+          <div className="strategy-grid">
+            <div className="strategy-step">
+              <span className="step-badge">09:45 AM</span>
+              <h4>1. Observation</h4>
+              <p>Do <b>not</b> buy immediately. Let the opening noise settle and record baseline VWAP & rank persistence.</p>
+            </div>
+
+            <div className="strategy-step highlight">
+              <span className="step-badge green">10:30 AM</span>
+              <h4>2. Primary Entry (Best)</h4>
+              <p>Execute entry on Top AI picks with <b>Streak ≥ 2</b> that hold above VWAP. Target +1.0%, SL -0.5%.</p>
+            </div>
+
+            <div className="strategy-step">
+              <span className="step-badge">11:30 AM</span>
+              <h4>3. Breakout Entry</h4>
+              <p>Enter only if stock breaks morning high with strong volume. Hold trade until 1:30 PM.</p>
+            </div>
+
+            <div className="strategy-step danger">
+              <span className="step-badge red">13:00 / 1:00 PM</span>
+              <h4>4. Trailing & Exit</h4>
+              <p><b>No fresh entries.</b> Trail stop-loss to entry price. Close all MIS positions before 3:15 PM.</p>
+            </div>
+          </div>
+
+          <div className="golden-rules">
+            <div className="rule-title">⚡ 3 GOLDEN CHECKLIST RULES:</div>
+            <ul>
+              <li><strong>Streak &gt; 1:</strong> Stock must appear in at least 2 scans to confirm institutional participation.</li>
+              <li><strong>Price &gt; VWAP:</strong> Never buy below VWAP; avoid buying if price is &gt;2.5% above VWAP (overbought).</li>
+              <li><strong>Nifty Alignment:</strong> Avoid taking long entries if Nifty 50 is trending down heavily in the same time slot.</li>
+            </ul>
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
 function Dashboard({ day, recommendations, time, next }) {
   const scanCount = SCAN_TIMES.filter((scheduledTime) =>
     day?.scans?.some((scan) => scan.time === scheduledTime)
@@ -202,10 +272,13 @@ function Dashboard({ day, recommendations, time, next }) {
           <span className="label">NEXT SCAN</span>
           <strong>{next}</strong>
           <span className="market-time">
-            {next === 'Complete' ? 'Morning run complete' : 'Scheduled automatically (15m interval)'}
+            {next === 'Complete' ? 'Intraday run complete' : 'Scheduled automatically'}
           </span>
         </div>
       </section>
+
+      {/* Intraday Strategy Playbook Card */}
+      <StrategyGuide />
 
       <section className="card progress">
         <div className="section-heading">
@@ -234,7 +307,7 @@ function Dashboard({ day, recommendations, time, next }) {
         <div className="section-heading">
           <div>
             <h2>Momentum recommendations</h2>
-            <span>Top 3 F&O vs. Top 3 Overall (Filtered from Top 10 Analysis)</span>
+            <span>Top 3 F&O vs. Top 3 Overall (Filtered by AI & Quantitative Rules)</span>
           </div>
           <span className="spark">✦</span>
         </div>
@@ -298,7 +371,6 @@ function History({ scans }) {
 
   const activeScan = scans.find((s) => s.time === selectedTime) || scans[scans.length - 1];
 
-  // Extract recommendations generated specifically at this time slot
   const recs = activeScan?.recommendations || {};
   const foTop3 = Array.isArray(recs.foTop3) ? recs.foTop3.slice(0, 3) : [];
   const overallTop3 = Array.isArray(recs.overallTop3) ? recs.overallTop3.slice(0, 3) : [];
@@ -313,7 +385,6 @@ function History({ scans }) {
         <span className="history-badge">{scans.length} Scans Saved</span>
       </div>
 
-      {/* Time Slot Selector Chips */}
       <div className="time-chips-container">
         <label className="time-chips-label">SELECT SCAN TIME:</label>
         <div className="time-chips">
@@ -330,7 +401,6 @@ function History({ scans }) {
         </div>
       </div>
 
-      {/* Recommended Stocks for Selected Time Slot */}
       {activeScan && (
         <div className="history-details">
           <div className="history-timestamp-bar">
@@ -346,7 +416,6 @@ function History({ scans }) {
           </div>
 
           <div className="dual-rec-container">
-            {/* F&O Category Top 3 at Selected Time */}
             <div className="rec-group">
               <div className="rec-group-title">
                 <h3>F&O Top 3</h3>
@@ -363,7 +432,6 @@ function History({ scans }) {
               </div>
             </div>
 
-            {/* Overall Category Top 3 at Selected Time */}
             <div className="rec-group">
               <div className="rec-group-title">
                 <h3>Overall Top 3</h3>
