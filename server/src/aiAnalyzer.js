@@ -7,7 +7,6 @@ const ai = apiKey ? new GoogleGenAI({ apiKey }) : null;
 export async function filterWithAI(candidates, marketContext = {}) {
   if (!ai || !candidates || candidates.length === 0) return null;
 
-  // Pass concise mathematical parameters to keep latency minimal
   const candidateData = candidates.map((c) => ({
     symbol: c.symbol,
     ltp: c.raw?.ltp || c.lastPrice || 0,
@@ -38,28 +37,36 @@ Instructions:
 `;
 
   try {
-    const response = await ai.models.generateContent({
-      model: "gemini-2.0-flash",
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.ARRAY,
-          items: {
-            type: Type.OBJECT,
-            properties: {
-              symbol: { type: Type.STRING },
-              confidence: { type: Type.STRING },
-              signal: { type: Type.STRING },
-              aiReasoning: { type: Type.ARRAY, items: { type: Type.STRING } },
+    const interaction = await ai.interactions.create({
+      model: "gemini-3.7-flash",
+      input: prompt,
+      response_format: {
+        type: "json_schema",
+        json_schema: {
+          name: "stock_recommendations",
+          schema: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                symbol: { type: "string" },
+                confidence: { type: "string" },
+                signal: { type: "string" },
+                aiReasoning: {
+                  type: "array",
+                  items: { type: "string" },
+                },
+              },
+              required: ["symbol", "confidence", "signal", "aiReasoning"],
             },
-            required: ["symbol", "confidence", "signal", "aiReasoning"],
           },
         },
       },
     });
 
-    const parsedResults = JSON.parse(response.text);
+    const parsedResults = JSON.parse(
+      interaction.output_text || interaction.text || "[]"
+    );
     return Array.isArray(parsedResults) && parsedResults.length > 0
       ? parsedResults
       : null;
