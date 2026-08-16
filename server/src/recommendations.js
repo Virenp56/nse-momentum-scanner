@@ -1,11 +1,6 @@
 // src/recommendations.js
-import { GoogleGenAI, Type } from "@google/genai";
 import { fetchChartData, fetchGetQuoteData, fetchAllIndices } from "./nse.js";
-
-// Initialize Gemini Client
-const ai = process.env.GEMINI_API_KEY
-  ? new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY })
-  : null;
+import { filterWithAI } from "./aiAnalyzer.js";
 
 /**
  * 14-Period RSI Calculation
@@ -340,89 +335,34 @@ async function evaluateCandidate(candidate, scansData, totalScans, indexMap) {
 }
 
 /**
- * AI Filter: Evaluates shortlisted mathematical candidates using Gemini
+ * Merge AI analysis back onto candidate objects ensuring UI field safety
  */
-async function evaluateWithAI(candidates, marketContext = {}) {
-  if (!ai || !candidates || candidates.length === 0) return null;
-
-  try {
-    const candidateSummary = candidates.map((c) => ({
-      symbol: c.symbol,
-      ltp: c.raw?.ltp || c.lastPrice,
-      vwap: c.raw?.vwap,
-      dayHigh: c.raw?.dayHigh,
-      deliveryPct: c.raw?.deliveryPct,
-      pChange: c.currentChange,
-      rsi: c.rsiValue || 50,
-      ruleScore: Math.round(c.score || 0),
-      currentReasons: c.reasons,
-    }));
-
-    const prompt = `
-You are a quantitative momentum trading expert specializing in the Indian Stock Market (NSE).
-Review this shortlist of mathematically screened intraday gainers:
-
-Market Benchmark:
-- NIFTY 50 Change: ${marketContext.niftyPChange || 0}%
-
-Candidate Stocks:
-${JSON.stringify(candidateSummary, null, 2)}
-
-Task:
-1. Select the top 3 safest high-probability momentum continuations for intraday buying (+1% target, 0.5% stop loss).
-2. Filter out false breakouts (e.g. overextended RSI > 78, poor delivery %, or large distance above VWAP).
-3. Provide crisp analytical reasons for each selected symbol.
-`;
-
-    const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.ARRAY,
-          items: {
-            type: Type.OBJECT,
-            properties: {
-              symbol: { type: Type.STRING },
-              confidence: { type: Type.STRING },
-              signal: { type: Type.STRING },
-              reasons: { type: Type.ARRAY, items: { type: Type.STRING } },
-            },
-            required: ["symbol", "confidence", "signal", "reasons"],
-          },
-        },
-      },
-    });
-
-    const aiPicks = JSON.parse(response.text);
-
-    // Map AI analysis back to candidate UI objects
-    const candidateMap = new Map(candidates.map((c) => [c.symbol, c]));
-    const results = [];
-
-    for (const pick of aiPicks) {
-      const original = candidateMap.get(pick.symbol);
-      if (original) {
-        results.push({
-          ...original,
-          confidence: pick.confidence.includes("%")
-            ? pick.confidence
-            : `${pick.confidence}%`,
-          signal: pick.signal || original.signal,
-          reasons:
-            Array.isArray(pick.reasons) && pick.reasons.length > 0
-              ? pick.reasons.slice(0, 3)
-              : original.reasons,
-        });
-      }
-    }
-
-    return results.length > 0 ? results.slice(0, 3) : null;
-  } catch (err) {
-    console.warn("AI analysis bypassed (fallback to rules):", err.message);
-    return null;
+function mergeAIPicks(candidates, aiPicks) {
+  if (!aiPicks || !Array.isArray(aiPicks) || aiPicks.length === 0) {
+    return candidates.slice(0, 3);
   }
+
+  const map = new Map(candidates.map((c) => [c.symbol, c]));
+  const merged = [];
+
+  for (const pick of aiPicks) {
+    const original = map.get(pick.symbol);
+    if (original) {
+      merged.push({
+        ...original,
+        confidence: pick.confidence?.includes("%")
+          ? pick.confidence
+          : `${pick.confidence || original.confidence}%`,
+        signal: pick.signal || original.signal,
+        reasons:
+          Array.isArray(pick.aiReasoning) && pick.aiReasoning.length > 0
+            ? pick.aiReasoning.slice(0, 3)
+            : original.reasons,
+      });
+    }
+  }
+
+  return merged.length > 0 ? merged.slice(0, 3) : candidates.slice(0, 3);
 }
 
 /**
@@ -536,14 +476,14 @@ export async function buildRecommendations(scans = []) {
       .sort((a, b) => b.score - a.score);
 
     // 3. AI Re-Ranking with Rule Fallback
-    const [aiFoTop3, aiOverallTop3] = await Promise.all([
-      evaluateWithAI(evaluatedFo.slice(0, 7), marketContext),
-      evaluateWithAI(evaluatedOverall.slice(0, 7), marketContext),
+    const [aiFoPicks, aiOverallPicks] = await Promise.all([
+      filterWithAI(evaluatedFo.slice(0, 7), marketContext),
+      filterWithAI(evaluatedOverall.slice(0, 7), marketContext),
     ]);
 
     return {
-      foTop3: aiFoTop3 || evaluatedFo.slice(0, 3),
-      overallTop3: aiOverallTop3 || evaluatedOverall.slice(0, 3),
+      foTop3: mergeAIPicks(evaluatedFo, aiFoPicks),
+      overallTop3: mergeAIPicks(evaluatedOverall, aiOverallPicks),
     };
   } catch (err) {
     console.error("Failed to build recommendations safely:", err.message);

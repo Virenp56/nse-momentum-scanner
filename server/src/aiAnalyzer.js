@@ -1,43 +1,45 @@
 // src/aiAnalyzer.js
 import { GoogleGenAI, Type } from "@google/genai";
 
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+const apiKey = process.env.GEMINI_API_KEY;
+const ai = apiKey ? new GoogleGenAI({ apiKey }) : null;
 
 export async function filterWithAI(candidates, marketContext = {}) {
-  if (!candidates || candidates.length === 0) return [];
+  if (!ai || !candidates || candidates.length === 0) return null;
 
-  // Pass only relevant mathematical metrics to keep latency and tokens minimal
+  // Pass concise mathematical parameters to keep latency minimal
   const candidateData = candidates.map((c) => ({
     symbol: c.symbol,
-    ltp: c.raw?.ltp || c.lastPrice,
-    vwap: c.raw?.vwap,
-    deliveryPct: c.raw?.deliveryPct,
-    pChange: c.currentChange || c.latestPChange,
+    ltp: c.raw?.ltp || c.lastPrice || 0,
+    vwap: c.raw?.vwap || 0,
+    dayHigh: c.raw?.dayHigh || 0,
+    deliveryPct: c.raw?.deliveryPct || 0,
+    pChange: c.currentChange || c.latestPChange || 0,
     rsi: c.rsiValue || 50,
+    ruleScore: Math.round(c.score || 0),
     appearances: c.reasons?.length || 1,
   }));
 
   const prompt = `
 You are a senior algorithmic intraday trader focusing on the Indian NSE Market.
-Review the following shortlist of momentum gainers and their technical context:
+Review the following shortlist of mathematically screened momentum gainers:
 
-Market Context:
-- Nifty 50 Change: ${marketContext.niftyChange || "0"}%
-- Sector Performance: ${marketContext.sector || "Mixed"}
+Market Benchmark:
+- NIFTY 50 Change: ${marketContext.niftyPChange || "0"}%
 
 Candidates:
 ${JSON.stringify(candidateData, null, 2)}
 
 Instructions:
-1. Reject stocks that are chasing extended momentum (e.g. RSI > 75 or trading far above VWAP).
-2. Reject stocks with poor institutional backing (e.g. delivery % < 25%).
+1. Reject stocks that are chasing overextended momentum (e.g. RSI > 78 or trading too far above VWAP).
+2. Reject stocks with low institutional backing (e.g. delivery % < 25%).
 3. Select the Top 3 highest probability momentum continuations for intraday long entries (+1% target, 0.5% stop loss).
-4. Provide a structured reason and updated confidence rating for each.
+4. Provide structured reasons, updated signal (STRONG BUY or BUY), and a confidence score for each selected symbol.
 `;
 
   try {
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
+      model: "gemini-2.0-flash",
       contents: prompt,
       config: {
         responseMimeType: "application/json",
@@ -50,8 +52,6 @@ Instructions:
               confidence: { type: Type.STRING },
               signal: { type: Type.STRING },
               aiReasoning: { type: Type.ARRAY, items: { type: Type.STRING } },
-              suggestedTarget: { type: Type.NUMBER },
-              suggestedStopLoss: { type: Type.NUMBER },
             },
             required: ["symbol", "confidence", "signal", "aiReasoning"],
           },
@@ -60,12 +60,14 @@ Instructions:
     });
 
     const parsedResults = JSON.parse(response.text);
-    return parsedResults;
+    return Array.isArray(parsedResults) && parsedResults.length > 0
+      ? parsedResults
+      : null;
   } catch (err) {
-    console.error(
-      "AI Analysis failed, falling back to rule-based scores:",
+    console.warn(
+      "AI Analysis bypassed (falling back to math rules):",
       err.message
     );
-    return [];
+    return null;
   }
 }
