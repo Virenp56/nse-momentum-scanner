@@ -6,7 +6,7 @@ chromium.use(stealth());
 
 let browserInstance = null;
 let sharedContext = null;
-let sharedPage = null;
+let isWarmedUp = false;
 
 export async function getBrowser() {
   if (browserInstance && browserInstance.isConnected()) {
@@ -23,42 +23,65 @@ export async function getBrowser() {
       "--no-first-run",
       "--no-zygote",
       "--disable-gpu",
+      "--disable-http2",
+      "--window-size=1920,1080",
     ],
   });
 
   return browserInstance;
 }
 
-export async function getSharedPage() {
-  if (sharedPage && !sharedPage.isClosed()) return sharedPage;
+export async function getSharedContext() {
+  if (sharedContext) return sharedContext;
 
-  const b = await getBrowser();
-  sharedContext = await b.newContext({
+  const browser = await getBrowser();
+  sharedContext = await browser.newContext({
     userAgent:
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    viewport: { width: 1920, height: 1080 },
+    locale: "en-US",
+    timezoneId: "Asia/Kolkata",
     extraHTTPHeaders: {
       "Accept-Language": "en-US,en;q=0.9",
-      Accept: "application/json, text/plain, */*",
+      Accept: "*/*",
+      "Sec-Ch-Ua":
+        '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+      "Sec-Ch-Ua-Mobile": "?0",
+      "Sec-Ch-Ua-Platform": '"Windows"',
+      "Sec-Fetch-Dest": "empty",
+      "Sec-Fetch-Mode": "cors",
+      "Sec-Fetch-Site": "same-origin",
     },
   });
 
-  sharedPage = await sharedContext.newPage();
+  return sharedContext;
+}
 
-  // Warmup NSE cookies on the actual top-gainers-loosers section
+async function warmupSession() {
+  if (isWarmedUp) return;
+  const context = await getSharedContext();
+  const page = await context.newPage();
+
   try {
-    await sharedPage.goto(
-      "https://www.nseindia.com/market-data/top-gainers-loosers",
-      {
-        waitUntil: "domcontentloaded",
-        timeout: 30000,
-      }
-    );
-    await sharedPage.waitForTimeout(2500);
-  } catch (e) {
-    console.warn("NSE Warmup warning:", e.message);
+    const res = await page.goto("https://www.nseindia.com", {
+      waitUntil: "domcontentloaded",
+      timeout: 30000,
+    });
+    if (!res || !res.ok()) {
+      throw new Error(
+        `Warmup page returned non-200 status: ${
+          res ? res.status() : "No response"
+        }`
+      );
+    }
+    await page.waitForTimeout(2000);
+    isWarmedUp = true;
+  } catch (err) {
+    isWarmedUp = false;
+    throw new Error(`NSE Session Warmup Failed: ${err.message}`);
+  } finally {
+    await page.close().catch(() => {});
   }
-
-  return sharedPage;
 }
 
 function getTodayMarketOpenTimestamp() {
@@ -75,102 +98,80 @@ function getTodayMarketOpenTimestamp() {
   return Math.floor(marketOpenIST.getTime() / 1000);
 }
 
-// Helper to fetch live scan arrays with clear error debugging
+// Strictly fetch JSON data via browser session context; throws error on failure
 async function fetchNseApiData(apiUrl) {
-  try {
-    const page = await getSharedPage();
-    return await page.evaluate(async (url) => {
-      try {
-        const res = await fetch(url, {
-          headers: {
-            Accept: "application/json, text/plain, */*",
-            "X-Requested-With": "XMLHttpRequest",
-          },
-          credentials: "include",
-        });
-        if (!res.ok) {
-          console.error(`NSE fetch failed with status: ${res.status}`);
-          return null;
-        }
-        return await res.json();
-      } catch (err) {
-        console.error(`Browser fetch error: ${err.message}`);
-        return null;
-      }
-    }, apiUrl);
-  } catch (err) {
-    console.error("fetchNseApiData error:", err.message);
-    sharedPage = null; // Reset page on network failure
-    return null;
+  await warmupSession();
+  const context = await getSharedContext();
+
+  const response = await context.request.get(apiUrl, {
+    headers: {
+      Referer: "https://www.nseindia.com/market-data/top-gainers-loosers",
+      "X-Requested-With": "XMLHttpRequest",
+    },
+    timeout: 20000,
+  });
+
+  if (!response.ok()) {
+    throw new Error(
+      `NSE API request failed [Status ${response.status()}]: ${apiUrl}`
+    );
   }
+
+  const data = await response.json();
+  if (!data || (typeof data === "object" && Object.keys(data).length === 0)) {
+    throw new Error(`NSE API returned empty payload for: ${apiUrl}`);
+  }
+
+  return data;
 }
 
 export async function fetchGainers() {
-  try {
-    const data = await fetchNseApiData(
-      "https://www.nseindia.com/api/live-analysis-variations?index=gainers"
-    );
-    return data || {};
-  } catch (e) {
-    console.error("Failed to fetch gainers:", e.message);
-    return {};
+  const data = await fetchNseApiData(
+    "https://www.nseindia.com/api/live-analysis-variations?index=gainers"
+  );
+  if (!data.NIFTY && !data.FOSec && !data.data) {
+    throw new Error("Invalid gainers payload structure received from NSE API.");
   }
+  return data;
 }
 
 export async function fetchLosers() {
   try {
-    // Note: NSE supports both 'loosers' and 'losers', try primary
-    let data = await fetchNseApiData(
+    return await fetchNseApiData(
       "https://www.nseindia.com/api/live-analysis-variations?index=loosers"
     );
-    if (!data || Object.keys(data).length === 0) {
-      data = await fetchNseApiData(
-        "https://www.nseindia.com/api/live-analysis-variations?index=losers"
-      );
-    }
-    return data || {};
-  } catch (e) {
-    console.error("Failed to fetch losers:", e.message);
-    return {};
+  } catch {
+    return await fetchNseApiData(
+      "https://www.nseindia.com/api/live-analysis-variations?index=losers"
+    );
   }
 }
 
 export async function fetchAllIndices() {
-  try {
-    const data = await fetchNseApiData(
-      "https://www.nseindia.com/api/allIndices"
-    );
-    return data?.data || [];
-  } catch (err) {
-    console.warn("Error fetching market indices:", err.message);
-    return [];
+  const data = await fetchNseApiData("https://www.nseindia.com/api/allIndices");
+  if (!Array.isArray(data?.data)) {
+    throw new Error("Invalid market indices payload received from NSE API.");
   }
+  return data.data;
 }
 
 export async function fetchGetQuoteData(symbol) {
-  try {
-    const url = `https://www.nseindia.com/api/NextApi/apiClient/GetQuoteApi?functionName=getSymbolData&marketType=N&series=EQ&symbol=${encodeURIComponent(
-      symbol
-    )}`;
-    const data = await fetchNseApiData(url);
-    return data?.equityResponse?.[0] || null;
-  } catch (err) {
-    console.warn(`Quote fetch error for ${symbol}:`, err.message);
-    return null;
+  const url = `https://www.nseindia.com/api/NextApi/apiClient/GetQuoteApi?functionName=getSymbolData&marketType=N&series=EQ&symbol=${encodeURIComponent(
+    symbol
+  )}`;
+  const data = await fetchNseApiData(url);
+  const quote = data?.equityResponse?.[0];
+  if (!quote) {
+    throw new Error(`Quote data not available for symbol: ${symbol}`);
   }
+  return quote;
 }
 
 export async function fetchChartData(symbol) {
-  try {
-    const toDate = Math.floor(Date.now() / 1000);
-    const fromDate = getTodayMarketOpenTimestamp();
-    const encodedSym = encodeURIComponent(symbol + "-EQ");
-    const url = `https://charting.nseindia.com/v1/charts/symbolHistoricalData?token=2031&fromDate=${fromDate}&toDate=${toDate}&symbol=${encodedSym}&symbolType=Equity&chartType=I&timeInterval=1`;
+  const toDate = Math.floor(Date.now() / 1000);
+  const fromDate = getTodayMarketOpenTimestamp();
+  const encodedSym = encodeURIComponent(symbol + "-EQ");
+  const url = `https://charting.nseindia.com/v1/charts/symbolHistoricalData?token=2031&fromDate=${fromDate}&toDate=${toDate}&symbol=${encodedSym}&symbolType=Equity&chartType=I&timeInterval=1`;
 
-    const data = await fetchNseApiData(url);
-    return data;
-  } catch (err) {
-    console.error(`Error fetching chart data for ${symbol}:`, err.message);
-    return null;
-  }
+  return await fetchNseApiData(url);
 }
