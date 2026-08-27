@@ -12,22 +12,19 @@ app.use(express.json());
 
 // 15-minute scheduled scan slots
 const scanTimes = [
+  // Morning Session
   "09:45",
   "10:00",
   "10:15",
   "10:30",
   "10:45",
-  "11:00",
-  "11:15",
-  "11:30",
-  "11:45",
-  "12:00",
-  "12:15",
-  "12:30",
+
+  // Afternoon Session
   "12:45",
   "13:00",
   "13:15",
   "13:30",
+  "13:45",
 ];
 let scanning = false;
 
@@ -38,6 +35,16 @@ const indiaTime = () =>
     minute: "2-digit",
     hour12: false,
   }).format(new Date());
+// Helper to filter scans by session window
+function getSessionScans(scans, currentTime) {
+  // Morning session: up to 11:30
+  // Afternoon session: 12:45 onwards
+  const isMorning = currentTime <= "11:30";
+
+  return scans.filter((s) => {
+    return isMorning ? s.time <= "11:30" : s.time >= "12:00";
+  });
+}
 
 async function runScan(forcedTime) {
   if (scanning) throw new Error("A scan is already in progress.");
@@ -63,8 +70,11 @@ async function runScan(forcedTime) {
     day.scans.push(scanEntry);
     day.scans.sort((a, b) => a.time.localeCompare(b.time));
 
-    // Calculate recommendations for all accumulated scans up to this slot
-    const slotRecommendations = await buildRecommendations(day.scans);
+    // Get ONLY the scans belonging to the current session
+    const currentSessionScans = getSessionScans(day.scans, time);
+
+    // Calculate recommendations isolated to this session
+    const slotRecommendations = await buildRecommendations(currentSessionScans);
 
     // Attach evaluated recommendations to this scan slot
     scanEntry.recommendations = slotRecommendations;
@@ -78,7 +88,6 @@ async function runScan(forcedTime) {
     scanning = false;
   }
 }
-
 // Set up cron schedules
 for (const time of scanTimes) {
   const [hour, minute] = time.split(":");
@@ -110,11 +119,14 @@ app.get("/api/scans", async (_, res, next) => {
 app.get("/api/recommendations", async (_, res, next) => {
   try {
     const day = await getToday();
-    res.json(
-      day.recommendations?.foTop3
-        ? day.recommendations
-        : await buildRecommendations(day.scans)
-    );
+    if (day.recommendations?.foTop3) {
+      return res.json(day.recommendations);
+    }
+
+    const currentTime = indiaTime();
+    const activeSessionScans = getSessionScans(day.scans, currentTime);
+
+    res.json(await buildRecommendations(activeSessionScans));
   } catch (e) {
     next(e);
   }
