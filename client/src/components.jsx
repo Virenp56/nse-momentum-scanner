@@ -62,14 +62,19 @@ export function Empty({ text }) {
 // src/components.jsx
 
 export function Recommendation({ item }) {
-  if (!item) return <Empty text="Recommendations are generated after the available scans are analysed." />;
+  if (!item) return <Empty text="No recommendations available." />;
   
   const tone = item.side === 'buy' || !item.side ? 'gain' : 'loss';
+  const isCrypto = item.raw?.isCrypto || false;
+  const currency = isCrypto ? '$' : '₹';
   
-  // Calculate Target Levels for Groww Intraday
-  const entryPrice = Number(item.raw?.ltp || item.currentChange || 0);
-  const targetPrice = (entryPrice * 1.01).toFixed(2);
-  const stopLossPrice = (entryPrice * 0.995).toFixed(2);
+  const entryPrice = Number(item.raw?.ltp || 0);
+  const targetPct = isCrypto ? 1.03 : 1.01;
+  const slPct = isCrypto ? 0.985 : 0.995;
+
+  const targetPrice = (entryPrice * targetPct).toFixed(entryPrice < 1 ? 4 : 2);
+  const stopLossPrice = (entryPrice * slPct).toFixed(entryPrice < 1 ? 4 : 2);
+  const displayEntry = entryPrice < 1 ? entryPrice.toFixed(4) : entryPrice.toFixed(2);
 
   return (
     <article className="recommendation">
@@ -78,8 +83,7 @@ export function Recommendation({ item }) {
           <span className={`pill ${tone}`}>{item.signal}</span>
           <h3>{item.symbol}</h3>
           <small>
-            Rank #{item.currentRank} · {item.currentChange >= 0 ? '+' : ''}
-            {item.currentChange?.toFixed(2)}%
+            {item.currentChange >= 0 ? '+' : ''}{item.currentChange?.toFixed(2)}%
           </small>
         </div>
         <div className={`score ${tone}`}>
@@ -88,32 +92,23 @@ export function Recommendation({ item }) {
         </div>
       </div>
 
-      {/* Target Trading Levels */}
       {entryPrice > 0 && (
         <div className="target-levels">
           <div>
-            <small>Entry (LTP)</small>
-            <b>₹{entryPrice}</b>
+            <small>Entry</small>
+            <b>{currency}{displayEntry}</b>
           </div>
           <div>
-            <small>Target (+1%)</small>
-            <b className="pos">₹{targetPrice}</b>
+            <small>Target</small>
+            <b className="pos">{currency}{targetPrice}</b>
           </div>
           <div>
-            <small>SL (-0.5%)</small>
-            <b className="neg">₹{stopLossPrice}</b>
+            <small>SL</small>
+            <b className="neg">{currency}{stopLossPrice}</b>
           </div>
         </div>
       )}
 
-      <div className="trends">
-        <span>
-          Rank <b>{item.rankTrend?.join(' → ')}</b>
-        </span>
-        <span>
-          Change <b>{item.changeTrend?.map((v) => `${v.toFixed(1)}%`).join(' → ')}</b>
-        </span>
-      </div>
       <ul>
         {item.reasons?.slice(0, 3).map((reason) => (
           <li key={reason}>{reason}</li>

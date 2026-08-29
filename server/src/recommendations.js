@@ -1,6 +1,7 @@
 // src/recommendations.js
 import { fetchChartData, fetchGetQuoteData, fetchAllIndices } from "./nse.js";
 import { filterWithAI } from "./aiAnalyzer.js";
+import { fetchCryptoKlines, fetchBtcChange } from "./crypto.js";
 
 /**
  * 14-Period RSI Calculation
@@ -489,4 +490,60 @@ export async function buildRecommendations(scans = []) {
     console.error("Failed to build recommendations safely:", err.message);
     return { foTop3: [], overallTop3: [] };
   }
+}
+
+export async function buildCryptoRecommendations(cryptoScans = []) {
+  if (!cryptoScans.length) return { foTop3: [], overallTop3: [] };
+
+  const latestScan = cryptoScans[cryptoScans.length - 1];
+  const gainers = latestScan.gainers || [];
+  const btcChange = await fetchBtcChange();
+
+  const evaluated = [];
+  for (const coin of gainers.slice(0, 8)) {
+    try {
+      const closes = await fetchCryptoKlines(coin.symbol);
+      const rsi = Math.round(calculateRSI(closes));
+      const ema9 = calculateEMA(closes, 9);
+      const ema20 = calculateEMA(closes, 20);
+      const latestClose = closes[closes.length - 1];
+      const isEmaBullish =
+        ema9 && ema20 ? latestClose > ema9 && ema9 > ema20 : false;
+
+      let score = 50;
+      if (rsi >= 55 && rsi <= 72) score += 20;
+      if (isEmaBullish) score += 15;
+      if (coin.priceChangePercent > btcChange) score += 15;
+
+      evaluated.push({
+        symbol: coin.symbol,
+        signal: score >= 70 ? "STRONG BUY" : "BUY",
+        side: "buy",
+        confidence: `${Math.min(score, 95)}%`,
+        currentRank: 1,
+        currentChange: coin.priceChangePercent,
+        reasons: [
+          `RSI at ${rsi} in momentum zone`,
+          `24h Volume: $${(coin.quoteVolume / 1000000).toFixed(1)}M`,
+          `Outperforming BTC by +${(
+            coin.priceChangePercent - btcChange
+          ).toFixed(1)}%`,
+        ],
+        raw: {
+          ltp: coin.lastPrice,
+          vwap: coin.vwap,
+          isCrypto: true,
+        },
+        score,
+      });
+    } catch (err) {
+      console.error(`Error analyzing ${coin.symbol}:`, err.message);
+    }
+  }
+
+  const sorted = evaluated.sort((a, b) => b.score - a.score);
+  return {
+    foTop3: sorted.slice(0, 3), // Reused in the UI layout
+    overallTop3: sorted.slice(3, 6),
+  };
 }

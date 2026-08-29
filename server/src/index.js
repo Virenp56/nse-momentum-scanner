@@ -1,31 +1,46 @@
+// src/index.js
 import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import cron from "node-cron";
 import { fetchGainers, fetchLosers } from "./nse.js";
+import { fetchCryptoGainersLosers } from "./crypto.js";
 import { getToday, saveToday, clearToday } from "./storage.js";
-import { buildRecommendations } from "./recommendations.js";
+import {
+  buildRecommendations,
+  buildCryptoRecommendations,
+} from "./recommendations.js";
 
 const app = express();
 app.use(cors({ origin: process.env.CLIENT_ORIGIN?.split(",") || "*" }));
 app.use(express.json());
 
-// 15-minute scheduled scan slots
+// Combined NSE (Morning/Afternoon) & Crypto (Evening) Scan Times
 const scanTimes = [
-  // Morning Session
+  // NSE Morning
   "09:45",
   "10:00",
   "10:15",
   "10:30",
   "10:45",
-
-  // Afternoon Session
+  // NSE Afternoon
   "12:45",
   "13:00",
   "13:15",
   "13:30",
   "13:45",
+  // Crypto Evening (8:00 PM - 10:00 PM IST)
+  "20:00",
+  "20:15",
+  "20:30",
+  "20:45",
+  "21:00",
+  "21:15",
+  "21:30",
+  "21:45",
+  "22:00",
 ];
+
 let scanning = false;
 
 const indiaTime = () =>
@@ -35,15 +50,9 @@ const indiaTime = () =>
     minute: "2-digit",
     hour12: false,
   }).format(new Date());
-// Helper to filter scans by session window
-function getSessionScans(scans, currentTime) {
-  // Morning session: up to 11:30
-  // Afternoon session: 12:45 onwards
-  const isMorning = currentTime <= "11:30";
 
-  return scans.filter((s) => {
-    return isMorning ? s.time <= "11:30" : s.time >= "12:00";
-  });
+function isCryptoSession(time) {
+  return time >= "18:00"; // Scans after 6:00 PM are treated as Crypto
 }
 
 async function runScan(forcedTime) {
@@ -54,14 +63,21 @@ async function runScan(forcedTime) {
     const day = await getToday();
     if (day.scans.some((scan) => scan.time === time)) return day;
 
-    const [gainers, losers] = await Promise.all([
-      fetchGainers(),
-      fetchLosers(),
-    ]);
+    let gainers, losers, marketType;
 
-    // Construct scan object
+    if (isCryptoSession(time)) {
+      marketType = "CRYPTO";
+      const cryptoData = await fetchCryptoGainersLosers();
+      gainers = cryptoData.gainers;
+      losers = cryptoData.losers;
+    } else {
+      marketType = "NSE";
+      [gainers, losers] = await Promise.all([fetchGainers(), fetchLosers()]);
+    }
+
     const scanEntry = {
       time,
+      market: marketType,
       timestamp: new Date().toISOString(),
       gainers,
       losers,
@@ -70,17 +86,18 @@ async function runScan(forcedTime) {
     day.scans.push(scanEntry);
     day.scans.sort((a, b) => a.time.localeCompare(b.time));
 
-    // Get ONLY the scans belonging to the current session
-    const currentSessionScans = getSessionScans(day.scans, time);
-
-    // Calculate recommendations isolated to this session
-    const slotRecommendations = await buildRecommendations(currentSessionScans);
-
-    // Attach evaluated recommendations to this scan slot
-    scanEntry.recommendations = slotRecommendations;
-
-    // Keep top-level recommendations updated with the latest slot
-    day.recommendations = slotRecommendations;
+    // Calculate recommendations
+    if (marketType === "CRYPTO") {
+      const cryptoScans = day.scans.filter((s) => s.market === "CRYPTO");
+      const recs = await buildCryptoRecommendations(cryptoScans);
+      scanEntry.recommendations = recs;
+      day.recommendations = recs;
+    } else {
+      const nseScans = day.scans.filter((s) => s.market !== "CRYPTO");
+      const recs = await buildRecommendations(nseScans);
+      scanEntry.recommendations = recs;
+      day.recommendations = recs;
+    }
 
     await saveToday(day);
     return day;
@@ -88,11 +105,12 @@ async function runScan(forcedTime) {
     scanning = false;
   }
 }
-// Set up cron schedules
+
+// Set up cron schedules (Monday to Sunday)
 for (const time of scanTimes) {
   const [hour, minute] = time.split(":");
   cron.schedule(
-    `${minute} ${hour} * * 1-5`,
+    `${minute} ${hour} * * *`,
     () => runScan(time).catch(console.error),
     { timezone: "Asia/Kolkata" }
   );
@@ -119,14 +137,7 @@ app.get("/api/scans", async (_, res, next) => {
 app.get("/api/recommendations", async (_, res, next) => {
   try {
     const day = await getToday();
-    if (day.recommendations?.foTop3) {
-      return res.json(day.recommendations);
-    }
-
-    const currentTime = indiaTime();
-    const activeSessionScans = getSessionScans(day.scans, currentTime);
-
-    res.json(await buildRecommendations(activeSessionScans));
+    res.json(day.recommendations || {});
   } catch (e) {
     next(e);
   }
@@ -140,14 +151,16 @@ app.delete("/api/today", async (_, res, next) => {
   }
 });
 
-app.use((err, _, res, __) => {
-  console.error(err);
-  res.status(500).json({ error: err.message || "Unexpected server error" });
+// Add this route in src/index.js
+app.get("/api/test-crypto", async (_, res, next) => {
+  try {
+    // Pass an evening time string (e.g. 20:00) to trigger crypto branch
+    const result = await runScan("20:00");
+    res.json({ message: "Crypto scan successful!", data: result });
+  } catch (err) {
+    next(err);
+  }
 });
 
 const port = process.env.PORT || 8080;
-
-// Start server directly without database connection wait
-app.listen(port, () => {
-  console.log(`NSE Momentum API listening on port ${port}`);
-});
+app.listen(port, () => console.log(`Scanner API listening on port ${port}`));
