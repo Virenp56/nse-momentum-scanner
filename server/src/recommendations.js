@@ -492,6 +492,8 @@ export async function buildRecommendations(scans = []) {
   }
 }
 
+// In src/recommendations.js
+
 export async function buildCryptoRecommendations(cryptoScans = []) {
   if (!cryptoScans.length) return { foTop3: [], overallTop3: [] };
 
@@ -532,9 +534,11 @@ export async function buildCryptoRecommendations(cryptoScans = []) {
         raw: {
           ltp: coin.lastPrice,
           vwap: coin.vwap,
+          deliveryPct: 0,
           isCrypto: true,
         },
         score,
+        rsiValue: rsi,
       });
     } catch (err) {
       console.error(`Error analyzing ${coin.symbol}:`, err.message);
@@ -542,8 +546,19 @@ export async function buildCryptoRecommendations(cryptoScans = []) {
   }
 
   const sorted = evaluated.sort((a, b) => b.score - a.score);
+
+  // 1. Pass the top mathematically screened crypto candidates to Gemini AI
+  const aiPicks = await filterWithAI(sorted.slice(0, 7), {
+    isCrypto: true,
+    btcChange,
+  });
+
+  // 2. Merge AI selections with fallback to mathematical rank
+  const finalFoTop3 = mergeAIPicks(sorted, aiPicks);
+  const finalOverallTop3 = sorted.slice(3, 6);
+
   return {
-    foTop3: sorted.slice(0, 3), // Reused in the UI layout
-    overallTop3: sorted.slice(3, 6),
+    foTop3: finalFoTop3,
+    overallTop3: finalOverallTop3,
   };
 }
