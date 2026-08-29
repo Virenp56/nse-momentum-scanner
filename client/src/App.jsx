@@ -288,18 +288,21 @@ function StrategyGuide({ activeMarket }) {
   );
 }
 
+
 function Dashboard({ day, recommendations, time, next, activeSchedule, activeMarket }) {
-  // Only count scans that belong to the active schedule
   const scanCount = activeSchedule.filter((scheduledTime) =>
     day?.scans?.some((scan) => scan.time === scheduledTime)
   ).length;
 
-  const foTop3 = Array.isArray(recommendations?.foTop3)
+  // Support both new 'topPicks' and legacy 'foTop3' structure safely
+  const picks = Array.isArray(recommendations?.topPicks)
+    ? recommendations.topPicks.slice(0, 3)
+    : Array.isArray(recommendations?.foTop3)
     ? recommendations.foTop3.slice(0, 3)
     : [];
-  const overallTop3 = Array.isArray(recommendations?.overallTop3)
-    ? recommendations.overallTop3.slice(0, 3)
-    : [];
+
+  const title = activeMarket === 'crypto' ? 'Top Momentum Alts' : 'F&O Top 3';
+  const tag = activeMarket === 'crypto' ? 'Momentum Leaders' : 'Zero Circuit Risk';
 
   return (
     <>
@@ -346,40 +349,18 @@ function Dashboard({ day, recommendations, time, next, activeSchedule, activeMar
       <section className="card recommendations">
         <div className="section-heading">
           <div>
-            <h2>{activeMarket === 'crypto' ? 'Crypto Momentum Picks' : 'Momentum recommendations'}</h2>
-            <span>{activeMarket === 'crypto' ? 'Top High Volume vs Outperforming Candidates' : 'Top 3 F&O vs. Top 3 Overall'}</span>
+            <h2>{title}</h2>
+            <span>{activeMarket === 'crypto' ? 'High-volume crypto momentum breakouts' : 'Filtered by AI & Quantitative Rules'}</span>
           </div>
-          <span className="spark">✦</span>
+          <span className="tag fo-tag">{tag}</span>
         </div>
 
-        <div className="dual-rec-container">
-          <div className="rec-group">
-            <div className="rec-group-title">
-              <h3>{activeMarket === 'crypto' ? 'Top Momentum Alts' : 'F&O Top 3'}</h3>
-              <span className="tag fo-tag">{activeMarket === 'crypto' ? 'High Volume' : 'Zero Circuit Risk'}</span>
-            </div>
-            <div className="recommend-grid">
-              {foTop3.length > 0 ? (
-                foTop3.map((item) => <Recommendation key={`rec-1-${item.symbol}`} item={item} />)
-              ) : (
-                <Empty text={`No ${activeMarket.toUpperCase()} recommendations analyzed yet.`} />
-              )}
-            </div>
-          </div>
-
-          <div className="rec-group">
-            <div className="rec-group-title">
-              <h3>{activeMarket === 'crypto' ? 'Trend Outperformers' : 'Overall Top 3'}</h3>
-              <span className="tag overall-tag">Max Momentum</span>
-            </div>
-            <div className="recommend-grid">
-              {overallTop3.length > 0 ? (
-                overallTop3.map((item) => <Recommendation key={`rec-2-${item.symbol}`} item={item} />)
-              ) : (
-                <Empty text={`No ${activeMarket.toUpperCase()} overall recommendations analyzed yet.`} />
-              )}
-            </div>
-          </div>
+        <div className="recommend-grid" style={{ marginTop: '14px' }}>
+          {picks.length > 0 ? (
+            picks.map((item) => <Recommendation key={`rec-${item.symbol}`} item={item} />)
+          ) : (
+            <Empty text={`No ${activeMarket.toUpperCase()} recommendations analyzed yet.`} />
+          )}
         </div>
       </section>
     </>
@@ -387,16 +368,12 @@ function Dashboard({ day, recommendations, time, next, activeSchedule, activeMar
 }
 
 function History({ scans, activeSchedule, activeMarket }) {
-  // Filter history chips to ONLY show time slots matching the active schedule
   const visibleScans = scans.filter((s) => activeSchedule.includes(s.time));
   const [selectedTime, setSelectedTime] = useState(visibleScans[0]?.time || null);
 
   useEffect(() => {
-    if (visibleScans.length > 0) {
-      // If current selected time is not part of this session, select the latest session scan
-      if (!visibleScans.some((s) => s.time === selectedTime)) {
-        setSelectedTime(visibleScans[visibleScans.length - 1].time);
-      }
+    if (visibleScans.length > 0 && !visibleScans.some((s) => s.time === selectedTime)) {
+      setSelectedTime(visibleScans[visibleScans.length - 1].time);
     }
   }, [visibleScans, selectedTime]);
 
@@ -416,8 +393,11 @@ function History({ scans, activeSchedule, activeMarket }) {
 
   const activeScan = visibleScans.find((s) => s.time === selectedTime) || visibleScans[visibleScans.length - 1];
   const recs = activeScan?.recommendations || {};
-  const foTop3 = Array.isArray(recs.foTop3) ? recs.foTop3.slice(0, 3) : [];
-  const overallTop3 = Array.isArray(recs.overallTop3) ? recs.overallTop3.slice(0, 3) : [];
+  const picks = Array.isArray(recs.topPicks)
+    ? recs.topPicks.slice(0, 3)
+    : Array.isArray(recs.foTop3)
+    ? recs.foTop3.slice(0, 3)
+    : [];
 
   return (
     <section className="card history-card">
@@ -451,7 +431,7 @@ function History({ scans, activeSchedule, activeMarket }) {
             <div>
               <span className="label">EVALUATED TIME SLOT</span>
               <h3>
-                <b>{activeScan.time} IST</b> ({activeMarket.toUpperCase()})
+                <b>{activeScan.time} IST</b> ({activeMarket === 'crypto' ? 'Top Momentum Alts' : 'F&O Top 3'})
               </h3>
             </div>
             <span className="history-time-meta">
@@ -459,38 +439,14 @@ function History({ scans, activeSchedule, activeMarket }) {
             </span>
           </div>
 
-          <div className="dual-rec-container">
-            <div className="rec-group">
-              <div className="rec-group-title">
-                <h3>{activeMarket === 'crypto' ? 'Top Momentum' : 'F&O Top 3'}</h3>
-                <span className="tag fo-tag">{activeScan.time} Slot</span>
-              </div>
-              <div className="recommend-grid">
-                {foTop3.length > 0 ? (
-                  foTop3.map((item) => (
-                    <Recommendation key={`hist-1-${item.symbol}-${activeScan.time}`} item={item} />
-                  ))
-                ) : (
-                  <Empty text={`No picks analyzed for ${activeScan.time}.`} />
-                )}
-              </div>
-            </div>
-
-            <div className="rec-group">
-              <div className="rec-group-title">
-                <h3>{activeMarket === 'crypto' ? 'Trend Outperformers' : 'Overall Top 3'}</h3>
-                <span className="tag overall-tag">{activeScan.time} Slot</span>
-              </div>
-              <div className="recommend-grid">
-                {overallTop3.length > 0 ? (
-                  overallTop3.map((item) => (
-                    <Recommendation key={`hist-2-${item.symbol}-${activeScan.time}`} item={item} />
-                  ))
-                ) : (
-                  <Empty text={`No picks analyzed for ${activeScan.time}.`} />
-                )}
-              </div>
-            </div>
+          <div className="recommend-grid">
+            {picks.length > 0 ? (
+              picks.map((item) => (
+                <Recommendation key={`hist-${item.symbol}-${activeScan.time}`} item={item} />
+              ))
+            ) : (
+              <Empty text={`No picks analyzed for ${activeScan.time}.`} />
+            )}
           </div>
         </div>
       )}

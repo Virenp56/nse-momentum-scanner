@@ -1,7 +1,15 @@
 // src/recommendations.js
 import { fetchChartData, fetchGetQuoteData, fetchAllIndices } from "./nse.js";
 import { filterWithAI } from "./aiAnalyzer.js";
-import { fetchCryptoKlines, fetchBtcChange } from "./crypto.js";
+import {
+  fetchCryptoKlines,
+  fetchBtcContext,
+  fetchDerivativesData,
+} from "./crypto.js";
+
+// ============================================================================
+// TECHNICAL INDICATOR UTILITIES
+// ============================================================================
 
 /**
  * 14-Period RSI Calculation
@@ -49,7 +57,51 @@ function calculateEMA(closes, period) {
 }
 
 /**
- * Full 10-Factor Evaluation with Continuous Metrics & Optimized Weights
+ * Average True Range (ATR) Calculation
+ */
+function calculateATR(candles, period = 14) {
+  if (!candles || candles.length < 2) return 0;
+  let trList = [];
+  for (let i = 1; i < candles.length; i++) {
+    const cur = candles[i];
+    const prev = candles[i - 1];
+    const tr = Math.max(
+      cur.high - cur.low,
+      Math.abs(cur.high - prev.close),
+      Math.abs(cur.low - prev.close)
+    );
+    trList.push(tr);
+  }
+  const slice = trList.slice(-period);
+  return slice.reduce((a, b) => a + b, 0) / slice.length;
+}
+
+/**
+ * Moving Average Convergence Divergence (MACD) Calculation
+ */
+function calculateMACD(closes) {
+  if (!closes || closes.length < 26) {
+    return { macd: 0, signal: 0, histogram: 0, bullishCross: false };
+  }
+  const ema12 = calculateEMA(closes, 12) || 0;
+  const ema26 = calculateEMA(closes, 26) || 0;
+  const macdVal = ema12 - ema26;
+  const signalVal = macdVal * 0.9;
+  const histogram = macdVal - signalVal;
+  return {
+    macd: macdVal,
+    signal: signalVal,
+    histogram,
+    bullishCross: histogram > 0,
+  };
+}
+
+// ============================================================================
+// NSE EQUITIES 10-FACTOR EVALUATION ENGINE (UNCHANGED)
+// ============================================================================
+
+/**
+ * Full 10-Factor Evaluation for NSE Equities with Continuous Metrics & Optimized Weights
  */
 async function evaluateCandidate(candidate, scansData, totalScans, indexMap) {
   const { symbol } = candidate;
@@ -357,7 +409,7 @@ function mergeAIPicks(candidates, aiPicks) {
         signal: pick.signal || original.signal,
         reasons:
           Array.isArray(pick.aiReasoning) && pick.aiReasoning.length > 0
-            ? pick.aiReasoning.slice(0, 3)
+            ? pick.aiReasoning.slice(0, 4)
             : original.reasons,
       });
     }
@@ -418,12 +470,11 @@ function extractCategoryScans(scans, categoryKey) {
 
 export async function buildRecommendations(scans = []) {
   if (!scans || !Array.isArray(scans) || scans.length === 0) {
-    return { foTop3: [], overallTop3: [] };
+    return { topPicks: [] };
   }
 
   try {
     const totalScans = scans.length;
-
     const indicesList = await fetchAllIndices().catch(() => []);
     const indexMap = new Map();
     if (Array.isArray(indicesList)) {
@@ -438,7 +489,7 @@ export async function buildRecommendations(scans = []) {
       niftyPChange: indexMap.get("NIFTY 50") || 0,
     };
 
-    // 1. Extract & Rank F&O Stocks
+    // Extract & Rank ONLY F&O Securities
     const foData = extractCategoryScans(scans, "FOSec");
     const shortlistedFo = foData.candidates
       .sort(
@@ -457,108 +508,304 @@ export async function buildRecommendations(scans = []) {
       .filter((item) => item && item.score > 0)
       .sort((a, b) => b.score - a.score);
 
-    // 2. Extract & Rank Overall Stocks
-    const overallData = extractCategoryScans(scans, "NIFTY");
-    const shortlistedOverall = overallData.candidates
-      .sort(
-        (a, b) =>
-          b.appearances - a.appearances || b.latestPChange - a.latestPChange
-      )
-      .slice(0, 10);
-
-    const evaluatedOverall = (
-      await Promise.all(
-        shortlistedOverall.map((cand) =>
-          evaluateCandidate(cand, overallData.scansData, totalScans, indexMap)
-        )
-      )
-    )
-      .filter((item) => item && item.score > 0)
-      .sort((a, b) => b.score - a.score);
-
-    // 3. AI Re-Ranking with Rule Fallback
-    const [aiFoPicks, aiOverallPicks] = await Promise.all([
-      filterWithAI(evaluatedFo.slice(0, 7), marketContext),
-      filterWithAI(evaluatedOverall.slice(0, 7), marketContext),
-    ]);
+    const aiFoPicks = await filterWithAI(
+      evaluatedFo.slice(0, 7),
+      marketContext
+    );
 
     return {
-      foTop3: mergeAIPicks(evaluatedFo, aiFoPicks),
-      overallTop3: mergeAIPicks(evaluatedOverall, aiOverallPicks),
+      topPicks: mergeAIPicks(evaluatedFo, aiFoPicks),
     };
   } catch (err) {
-    console.error("Failed to build recommendations safely:", err.message);
-    return { foTop3: [], overallTop3: [] };
+    console.error("Failed to build NSE recommendations:", err.message);
+    return { topPicks: [] };
   }
 }
 
-// In src/recommendations.js
+// ============================================================================
+// CRYPTO V2 MULTI-FACTOR EVALUATION ENGINE
+// ============================================================================
+
+async function evaluateCryptoCandidate(
+  candidate,
+  cryptoScans = [],
+  btcContext = {}
+) {
+  const symbol = candidate.symbol;
+
+  try {
+    // Fetch multi-timeframe OHLCV candle data concurrently
+    const [candles15m, candles1h, candles4h] = await Promise.all([
+      fetchCryptoKlines(symbol, "15", 50),
+      fetchCryptoKlines(symbol, "60", 25),
+      fetchCryptoKlines(symbol, "240", 15),
+    ]);
+
+    if (!candles15m || candles15m.length < 15) return null;
+
+    const closes15m = candles15m.map((c) => c.close);
+    const currentPrice = closes15m[closes15m.length - 1];
+
+    // --- FACTOR 1: MULTI-TIMEFRAME MOMENTUM (15%) ---
+    const m15 =
+      closes15m.length >= 2
+        ? ((currentPrice - closes15m[closes15m.length - 2]) /
+            closes15m[closes15m.length - 2]) *
+          100
+        : 0;
+    const m30 =
+      closes15m.length >= 3
+        ? ((currentPrice - closes15m[closes15m.length - 3]) /
+            closes15m[closes15m.length - 3]) *
+          100
+        : m15;
+    const m1h =
+      candles1h.length >= 2
+        ? ((currentPrice - candles1h[candles1h.length - 2].close) /
+            candles1h[candles1h.length - 2].close) *
+          100
+        : m15;
+    const m4h =
+      candles4h.length >= 2
+        ? ((currentPrice - candles4h[candles4h.length - 2].close) /
+            candles4h[candles4h.length - 2].close) *
+          100
+        : m1h;
+
+    // Acceleration check across recent 15m scan snapshots
+    let isAccelerating = true;
+    if (cryptoScans.length >= 2) {
+      const prevScan = cryptoScans[cryptoScans.length - 2];
+      const prevCandidate = prevScan.gainers?.find((g) => g.symbol === symbol);
+      if (prevCandidate) {
+        isAccelerating =
+          candidate.priceChangePercent >= prevCandidate.priceChangePercent;
+      }
+    }
+
+    const momentumScore = Math.min(
+      Math.max(
+        (m15 * 3 + m1h * 2 + m4h + (isAccelerating ? 15 : 0)) * 5 + 50,
+        0
+      ),
+      100
+    );
+
+    // --- FACTOR 2: VOLUME (15%) ---
+    const recentVol = candles15m[candles15m.length - 1].volume;
+    const avgVol =
+      candles15m.slice(-10).reduce((acc, c) => acc + c.volume, 0) / 10;
+    const volumeRatio = avgVol > 0 ? recentVol / avgVol : 1;
+    const isPriceVolumeBullish =
+      currentPrice >= candles15m[candles15m.length - 2].close &&
+      volumeRatio >= 1.0;
+
+    const volumeScore = Math.min(
+      Math.max(volumeRatio * 25 + (isPriceVolumeBullish ? 25 : 0), 0),
+      100
+    );
+
+    // --- FACTOR 3: TREND / EMA (12%) ---
+    const ema9 = calculateEMA(closes15m, 9) || currentPrice;
+    const ema20 = calculateEMA(closes15m, 20) || currentPrice;
+    const ema50 =
+      calculateEMA(closes15m, Math.min(50, closes15m.length)) || currentPrice;
+
+    const isBullishTrend =
+      currentPrice > ema9 && ema9 > ema20 && ema20 >= ema50;
+    const trendScore = isBullishTrend ? 90 : currentPrice > ema20 ? 70 : 40;
+
+    // --- FACTOR 4: RSI (8%) ---
+    const rsi14 = calculateRSI(closes15m, 14);
+    let rsiScore = 50;
+    if (rsi14 >= 55 && rsi14 <= 75) rsiScore = 85;
+    else if (rsi14 > 75 && rsi14 <= 85) rsiScore = 70;
+    else if (rsi14 < 45) rsiScore = 30;
+    else rsiScore = 60;
+
+    // --- FACTOR 5: RELATIVE STRENGTH VS BTC (8%) ---
+    const btc1h = btcContext.change1h || 0;
+    const rsDelta = m1h - btc1h;
+    const relativeStrengthScore = Math.min(Math.max(50 + rsDelta * 15, 0), 100);
+
+    // --- FACTOR 6: BREAKOUT (8%) ---
+    const recentHigh20 = Math.max(...candles15m.slice(-20).map((c) => c.high));
+    const isBreakout =
+      currentPrice >= recentHigh20 * 0.995 && volumeRatio > 1.2;
+    const breakoutScore = isBreakout ? 90 : 50;
+
+    // --- FACTOR 7: PRICE STRUCTURE (6%) ---
+    const h1 = candles15m[candles15m.length - 1].high;
+    const h2 = candles15m[candles15m.length - 3]?.high || h1;
+    const l1 = candles15m[candles15m.length - 1].low;
+    const l2 = candles15m[candles15m.length - 3]?.low || l1;
+    const isHigherHighLow = h1 >= h2 && l1 >= l2;
+    const structureScore = isHigherHighLow ? 85 : 55;
+
+    // --- FACTOR 8: VWAP (5%) ---
+    const cumPV = candles15m.reduce(
+      (acc, c) => acc + ((c.high + c.low + c.close) / 3) * c.volume,
+      0
+    );
+    const cumVol = candles15m.reduce((acc, c) => acc + c.volume, 0);
+    const vwap = cumVol > 0 ? cumPV / cumVol : currentPrice;
+    const vwapScore = currentPrice >= vwap ? 85 : 45;
+
+    // --- FACTOR 9: VOLATILITY (5%) ---
+    const atr = calculateATR(candles15m, 14);
+    const atrPct = (atr / currentPrice) * 100;
+    const volatilityScore = atrPct >= 1.0 && atrPct <= 8.0 ? 80 : 50;
+
+    // --- FACTOR 10: MACD (4%) ---
+    const macdData = calculateMACD(closes15m);
+    const macdScore = macdData.bullishCross ? 85 : 50;
+
+    // --- FACTOR 11: MARKET REGIME (5%) ---
+    const regimeScore = btcContext.trend === "BULLISH" ? 85 : 50;
+
+    // --- FACTOR 12: LIQUIDITY (4%) ---
+    const liquidityScore = candidate.quoteVolume > 10000000 ? 90 : 70;
+
+    // --- FACTOR 13: DERIVATIVES (5%) ---
+    const derivs = await fetchDerivativesData(symbol);
+    const derivativesScore = derivs.available
+      ? derivs.fundingRate <= 0.0005 && derivs.oiDelta >= 0
+        ? 85
+        : 60
+      : 70;
+
+    // --- FACTOR 14: SCAN PERSISTENCE ---
+    let persistenceBonus = 0;
+    if (cryptoScans.length > 1) {
+      const ranks = cryptoScans.map((scan) => {
+        const found = scan.gainers?.findIndex((g) => g.symbol === symbol);
+        return found !== undefined && found !== -1 ? found + 1 : 99;
+      });
+      if (ranks[ranks.length - 1] <= (ranks[0] || 99)) {
+        persistenceBonus = 5;
+      }
+    }
+
+    // Normalized 100% Weight Calculation
+    const rawScore =
+      momentumScore * 0.15 +
+      volumeScore * 0.15 +
+      trendScore * 0.12 +
+      rsiScore * 0.08 +
+      relativeStrengthScore * 0.08 +
+      breakoutScore * 0.08 +
+      structureScore * 0.06 +
+      vwapScore * 0.05 +
+      volatilityScore * 0.05 +
+      macdScore * 0.04 +
+      regimeScore * 0.05 +
+      liquidityScore * 0.04 +
+      derivativesScore * 0.05 +
+      persistenceBonus;
+
+    const finalScore = Math.min(Math.max(Math.round(rawScore), 0), 100);
+
+    // Explicit Non-Guarantee Signal Classification
+    let signal = "NEUTRAL";
+    if (finalScore >= 80) signal = "STRONG BUY CANDIDATE";
+    else if (finalScore >= 70) signal = "BUY CANDIDATE";
+    else if (finalScore >= 60) signal = "WATCH";
+    else if (finalScore >= 50) signal = "NEUTRAL";
+    else signal = "AVOID";
+
+    // Descriptive Quantitative Reasons
+    const reasons = [];
+    if (volumeRatio > 1.5) {
+      reasons.push(
+        `Volume is ${volumeRatio.toFixed(1)}x the recent 15m average`
+      );
+    }
+    if (isBullishTrend) {
+      reasons.push(`Bullish EMA alignment (Price > EMA9 > EMA20)`);
+    }
+    if (m1h > btc1h) {
+      reasons.push(
+        `Outperforming BTC by +${(m1h - btc1h).toFixed(1)}% over 1h`
+      );
+    }
+    if (isBreakout) {
+      reasons.push(`20-candle resistance breakout confirmed by volume`);
+    }
+    if (rsi14 >= 55 && rsi14 <= 75) {
+      reasons.push(`RSI at ${Math.round(rsi14)} in optimal momentum zone`);
+    }
+
+    return {
+      symbol,
+      signal,
+      side: "buy",
+      confidence: `${finalScore}%`,
+      currentRank: 1,
+      currentChange: candidate.priceChangePercent,
+      score: finalScore,
+      rsiValue: Math.round(rsi14),
+      scores: {
+        momentum: Math.round(momentumScore),
+        volume: Math.round(volumeScore),
+        trend: Math.round(trendScore),
+        rsi: Math.round(rsiScore),
+        relativeStrength: Math.round(relativeStrengthScore),
+        breakout: Math.round(breakoutScore),
+        structure: Math.round(structureScore),
+        vwap: Math.round(vwapScore),
+        volatility: Math.round(volatilityScore),
+        macd: Math.round(macdScore),
+        marketRegime: Math.round(regimeScore),
+        liquidity: Math.round(liquidityScore),
+        derivatives: Math.round(derivativesScore),
+      },
+      risk: {
+        level: finalScore >= 80 ? "LOW" : finalScore >= 70 ? "MEDIUM" : "HIGH",
+        score: Math.max(0, 100 - finalScore),
+        penalties: rsi14 > 75 ? ["Overheated RSI"] : [],
+      },
+      marketRegime: btcContext.trend || "NEUTRAL",
+      momentum: Math.round(m15 * 10) / 10,
+      volumeRatio: Math.round(volumeRatio * 10) / 10,
+      breakout: isBreakout,
+      reasons: reasons.slice(0, 4),
+      raw: {
+        ltp: currentPrice,
+        vwap,
+        volume: candidate.quoteVolume,
+        isCrypto: true,
+      },
+    };
+  } catch (err) {
+    console.error(`Error evaluating crypto candidate ${symbol}:`, err.message);
+    return null;
+  }
+}
 
 export async function buildCryptoRecommendations(cryptoScans = []) {
-  if (!cryptoScans.length) return { foTop3: [], overallTop3: [] };
+  if (!cryptoScans.length) return { topPicks: [] };
 
   const latestScan = cryptoScans[cryptoScans.length - 1];
   const gainers = latestScan.gainers || [];
-  const btcChange = await fetchBtcChange();
+  const btcContext = await fetchBtcContext();
 
-  const evaluated = [];
-  for (const coin of gainers.slice(0, 8)) {
-    try {
-      const closes = await fetchCryptoKlines(coin.symbol);
-      const rsi = Math.round(calculateRSI(closes));
-      const ema9 = calculateEMA(closes, 9);
-      const ema20 = calculateEMA(closes, 20);
-      const latestClose = closes[closes.length - 1];
-      const isEmaBullish =
-        ema9 && ema20 ? latestClose > ema9 && ema9 > ema20 : false;
+  const evaluated = (
+    await Promise.all(
+      gainers
+        .slice(0, 12)
+        .map((coin) => evaluateCryptoCandidate(coin, cryptoScans, btcContext))
+    )
+  )
+    .filter(Boolean)
+    .sort((a, b) => b.score - a.score);
 
-      let score = 50;
-      if (rsi >= 55 && rsi <= 72) score += 20;
-      if (isEmaBullish) score += 15;
-      if (coin.priceChangePercent > btcChange) score += 15;
-
-      evaluated.push({
-        symbol: coin.symbol,
-        signal: score >= 70 ? "STRONG BUY" : "BUY",
-        side: "buy",
-        confidence: `${Math.min(score, 95)}%`,
-        currentRank: 1,
-        currentChange: coin.priceChangePercent,
-        reasons: [
-          `RSI at ${rsi} in momentum zone`,
-          `24h Volume: $${(coin.quoteVolume / 1000000).toFixed(1)}M`,
-          `Outperforming BTC by +${(
-            coin.priceChangePercent - btcChange
-          ).toFixed(1)}%`,
-        ],
-        raw: {
-          ltp: coin.lastPrice,
-          vwap: coin.vwap,
-          deliveryPct: 0,
-          isCrypto: true,
-        },
-        score,
-        rsiValue: rsi,
-      });
-    } catch (err) {
-      console.error(`Error analyzing ${coin.symbol}:`, err.message);
-    }
-  }
-
-  const sorted = evaluated.sort((a, b) => b.score - a.score);
-
-  // 1. Pass the top mathematically screened crypto candidates to Gemini AI
-  const aiPicks = await filterWithAI(sorted.slice(0, 7), {
+  // AI Re-ranking (with automatic fallback to deterministic ranking)
+  const aiPicks = await filterWithAI(evaluated.slice(0, 7), {
     isCrypto: true,
-    btcChange,
+    btcChange: btcContext.change24h,
   });
 
-  // 2. Merge AI selections with fallback to mathematical rank
-  const finalFoTop3 = mergeAIPicks(sorted, aiPicks);
-  const finalOverallTop3 = sorted.slice(3, 6);
-
   return {
-    foTop3: finalFoTop3,
-    overallTop3: finalOverallTop3,
+    topPicks: mergeAIPicks(evaluated, aiPicks),
   };
 }
