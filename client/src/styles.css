@@ -175,6 +175,7 @@ nav button.active {
   justify-content: space-between;
   margin-top: 18px;
   position: relative;
+  flex-wrap: wrap;
 }
 
 .scan-steps:before {

@@ -23,7 +23,7 @@ const EXCLUDED_STABLES = [
 ];
 
 /**
- * 1. Fetch Top 24h Spot Gainers, High-Volume Movers, and Breakout Candidates
+ * 1. Fetch Candidates with Volume & Anti-Exhaustion Pre-Filtering
  */
 export async function fetchCryptoGainersLosers() {
   try {
@@ -42,6 +42,11 @@ export async function fetchCryptoGainersLosers() {
       .map((item) => {
         const lastPrice = parseFloat(item.lastPrice) || 0;
         const prevPrice24h = parseFloat(item.prevPrice24h) || lastPrice;
+        const highPrice = parseFloat(item.highPrice24h) || lastPrice;
+        const lowPrice = parseFloat(item.lowPrice24h) || lastPrice;
+        const quoteVolume =
+          parseFloat(item.turnover24h) || parseFloat(item.volume24h) || 0;
+
         const priceChangePercent =
           prevPrice24h > 0
             ? parseFloat(
@@ -49,29 +54,41 @@ export async function fetchCryptoGainersLosers() {
               )
             : parseFloat(item.price24hPcnt || 0) * 100;
 
+        // Calculate drop percentage from the 24h high
+        const pullFromHighPct =
+          highPrice > 0 ? ((highPrice - lastPrice) / highPrice) * 100 : 0;
+
         return {
           symbol: item.symbol.replace("USDT", ""),
           pair: item.symbol,
           market: "CRYPTO",
           lastPrice,
           priceChangePercent,
-          quoteVolume:
-            parseFloat(item.turnover24h) || parseFloat(item.volume24h) || 0,
-          highPrice: parseFloat(item.highPrice24h) || lastPrice,
-          lowPrice: parseFloat(item.lowPrice24h) || lastPrice,
+          quoteVolume,
+          highPrice,
+          lowPrice,
           prevPrice24h,
+          pullFromHighPct,
         };
       })
-      .filter((coin) => coin.quoteVolume > 1000000 && coin.lastPrice > 0);
+      .filter(
+        (coin) =>
+          coin.lastPrice > 0 &&
+          coin.quoteVolume >= 2000000 && // Filter out illiquid pairs
+          coin.priceChangePercent >= 0.5 && // Must show positive directional bias
+          coin.pullFromHighPct <= 8.0 // Reject tokens that already dropped >8% from peak (avoids late pump-and-dumps)
+      );
 
+    // Candidates showing positive 24h price action without major exhaustion dumps
     const gainers = [...usdtPairs]
       .sort((a, b) => b.priceChangePercent - a.priceChangePercent)
       .slice(0, 15);
+
+    // High volume liquidity leaders
     const volumeMovers = [...usdtPairs]
       .sort((a, b) => b.quoteVolume - a.quoteVolume)
       .slice(0, 10);
 
-    // Combine unique candidate discovery pools
     const combinedMap = new Map();
     [...gainers, ...volumeMovers].forEach((c) => combinedMap.set(c.symbol, c));
 
@@ -83,10 +100,9 @@ export async function fetchCryptoGainersLosers() {
 }
 
 /**
- * 2. Fetch Multi-Timeframe OHLCV Candlestick Data
- * Returns complete OHLCV objects: { time, open, high, low, close, volume, turnover }
+ * 2. Fetch Multi-Timeframe OHLCV Candlestick Data (Safely ordered without array mutation)
  */
-export async function fetchCryptoKlines(symbol, interval = "15", limit = 50) {
+export async function fetchCryptoKlines(symbol, interval = "5", limit = 60) {
   const pair = symbol.endsWith("USDT") ? symbol : `${symbol}USDT`;
   try {
     const { data } = await bybitClient.get("/kline", {
@@ -99,17 +115,21 @@ export async function fetchCryptoKlines(symbol, interval = "15", limit = 50) {
     });
 
     const list = data?.result?.list || [];
-    // Bybit returns newest candles first [startTime, open, high, low, close, volume, turnover]
-    // Reverse to chronological order (oldest to newest)
-    return list.reverse().map((k) => ({
-      time: parseInt(k[0], 10),
-      open: parseFloat(k[1]),
-      high: parseFloat(k[2]),
-      low: parseFloat(k[3]),
-      close: parseFloat(k[4]),
-      volume: parseFloat(k[5]),
-      turnover: parseFloat(k[6] || 0),
-    }));
+    if (!Array.isArray(list) || list.length === 0) return [];
+
+    // Slice first to prevent mutating the incoming data buffer, then reverse to chronological order
+    return list
+      .slice()
+      .reverse()
+      .map((k) => ({
+        time: parseInt(k[0], 10),
+        open: parseFloat(k[1]),
+        high: parseFloat(k[2]),
+        low: parseFloat(k[3]),
+        close: parseFloat(k[4]),
+        volume: parseFloat(k[5]),
+        turnover: parseFloat(k[6] || 0),
+      }));
   } catch (err) {
     console.error(
       `Error fetching klines for ${symbol} (${interval}):`,
@@ -120,14 +140,15 @@ export async function fetchCryptoKlines(symbol, interval = "15", limit = 50) {
 }
 
 /**
- * 3. Fetch Comprehensive BTC Benchmark & Market Regime Data
+ * 3. Fetch Synchronized BTC Benchmark & Market Regime Data
  */
 export async function fetchBtcContext() {
   try {
-    const [tickerRes, klines15m] = await Promise.all([
+    const [tickerRes, klines5m, klines15m] = await Promise.all([
       bybitClient.get("/tickers", {
         params: { category: "spot", symbol: "BTCUSDT" },
       }),
+      fetchCryptoKlines("BTCUSDT", "5", 15),
       fetchCryptoKlines("BTCUSDT", "15", 30),
     ]);
 
@@ -139,30 +160,45 @@ export async function fetchBtcContext() {
         ? parseFloat((((lastPrice - prevPrice) / prevPrice) * 100).toFixed(2))
         : 0;
 
+    let change5m = 0;
+    if (klines5m.length >= 2) {
+      const cNow = klines5m[klines5m.length - 1].close;
+      const cPrev = klines5m[klines5m.length - 2].close;
+      change5m = parseFloat((((cNow - cPrev) / cPrev) * 100).toFixed(2));
+    }
+
     let change15m = 0;
     let change1h = 0;
-    if (klines15m.length >= 4) {
+    // 1 hour on 15m candles requires comparing the current candle with 4 candles back (index - 5)
+    if (klines15m.length >= 5) {
       const cNow = klines15m[klines15m.length - 1].close;
       const c15Prev = klines15m[klines15m.length - 2].close;
-      const c1hPrev = klines15m[klines15m.length - 4].close;
+      const c1hPrev = klines15m[klines15m.length - 5].close;
       change15m = parseFloat((((cNow - c15Prev) / c15Prev) * 100).toFixed(2));
       change1h = parseFloat((((cNow - c1hPrev) / c1hPrev) * 100).toFixed(2));
     }
 
     return {
+      change5m,
       change15m,
       change1h,
       change24h,
-      trend: change24h >= 0 ? "BULLISH" : "NEUTRAL",
+      trend: change1h >= 0 ? "BULLISH" : "NEUTRAL",
     };
   } catch (err) {
     console.error("Error fetching BTC context:", err.message);
-    return { change15m: 0, change1h: 0, change24h: 0, trend: "NEUTRAL" };
+    return {
+      change5m: 0,
+      change15m: 0,
+      change1h: 0,
+      change24h: 0,
+      trend: "NEUTRAL",
+    };
   }
 }
 
 /**
- * 4. Fetch Optional Derivatives Data (Funding Rate & Open Interest)
+ * 4. Fetch Derivatives Data (Funding Rate & 5-minute Open Interest Trend)
  */
 export async function fetchDerivativesData(symbol) {
   const pair = symbol.endsWith("USDT") ? symbol : `${symbol}USDT`;
