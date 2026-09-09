@@ -95,39 +95,31 @@ function calculateVWAP(candles) {
 }
 
 // ============================================================================
-// SUSTAINED MOMENTUM & STRUCTURE CONFIRMATION
+// BALANCED MOMENTUM & STRUCTURE CONFIRMATION
 // ============================================================================
 
-/**
- * Validates real accumulation/continuation instead of a 1-candle pump-and-dump:
- * - Operates strictly on confirmed closed candles (excludes index -1).
- * - Checks net impulse over 35-40 min (7-8 candles).
- * - Rejects if price retraced > 45% from the local impulse peak.
- * - Confirms pullbacks happened on lower volume (absorption, not dumping).
- * - Requires price to be near EMA9 support, not stretched at exhaustion highs.
- */
 function validateMomentumStructure(closedCandles, ema9) {
   if (!closedCandles || closedCandles.length < 15) return { passed: false };
 
   const lookback = closedCandles.slice(-8);
   const latestClosed = lookback[lookback.length - 1];
 
-  // 1. Net directional push over the window
+  // 1. Moderate impulse check (reduced from 0.65% to 0.4% minimum gain)
   const windowOpen = lookback[0].open;
   const highestHigh = Math.max(...lookback.map((c) => c.high));
   const netGainPct = ((latestClosed.close - windowOpen) / windowOpen) * 100;
-  if (netGainPct < 0.65) {
+  if (netGainPct < 0.4) {
     return { passed: false, reason: "Insufficient directional impulse" };
   }
 
-  // 2. Anti-Dump Guard: Reject if dump gave back > 45% of peak move
+  // 2. Anti-dump threshold relaxed to standard normal pullback (55%)
   const totalRange = highestHigh - windowOpen;
   const retrace = highestHigh - latestClosed.close;
-  if (totalRange > 0 && retrace / totalRange > 0.45) {
-    return { passed: false, reason: "Heavy retrace from local peak" };
+  if (totalRange > 0 && retrace / totalRange > 0.55) {
+    return { passed: false, reason: "Excessive dump from local peak" };
   }
 
-  // 3. Volume Health: Red/pullback volume must not dominate buy volume
+  // 3. Sell volume guard: only reject if sell volume drastically overpowers buy volume
   const greenVol = lookback
     .filter((c) => c.close >= c.open)
     .map((c) => c.volume);
@@ -140,17 +132,14 @@ function validateMomentumStructure(closedCandles, ema9) {
     ? redVol.reduce((a, b) => a + b, 0) / redVol.length
     : 0;
 
-  if (avgRedVol > avgGreenVol * 1.25) {
-    return {
-      passed: false,
-      reason: "Distribution volume exceeds buying volume",
-    };
+  if (avgRedVol > avgGreenVol * 1.6) {
+    return { passed: false, reason: "Severe distribution volume" };
   }
 
-  // 4. Support Proximity: Must hold near EMA9 support, not extended at top
+  // 4. Proximity to EMA9 support (-0.8% to +2.0% allowed)
   const distFromEma9 = ((latestClosed.close - ema9) / ema9) * 100;
-  if (distFromEma9 < -0.4 || distFromEma9 > 1.3) {
-    return { passed: false, reason: "Extended away from support entry zone" };
+  if (distFromEma9 < -0.8 || distFromEma9 > 2.0) {
+    return { passed: false, reason: "Too far from moving average support" };
   }
 
   return { passed: true, netGainPct, distFromEma9 };
@@ -524,10 +513,11 @@ export async function buildRecommendations(scans = []) {
       .filter((item) => item && item.score > 0)
       .sort((a, b) => b.score - a.score);
 
-    const aiFoPicks = await filterWithAI(
-      evaluatedFo.slice(0, 7),
-      marketContext
-    );
+    // const aiFoPicks = await filterWithAI(
+    //   evaluatedFo.slice(0, 7),
+    //   marketContext
+    // );
+    const aiFoPicks = [];
 
     return {
       topPicks: mergeAIPicks(evaluatedFo, aiFoPicks),
@@ -539,7 +529,7 @@ export async function buildRecommendations(scans = []) {
 }
 
 // ============================================================================
-// HARDENED CRYPTO 5M SCALPER ENGINE (WITH SUSTAINED STRUCTURE VERIFICATION)
+// BALANCED CRYPTO 5M SCALPER ENGINE (BALANCED FALSE-BREAKOUT REJECTION)
 // ============================================================================
 
 async function evaluateCryptoCandidate(
@@ -556,42 +546,42 @@ async function evaluateCryptoCandidate(
       fetchCryptoKlines(symbol, "60", 24),
     ]);
 
-    if (!candles5m || candles5m.length < 30) return null;
-    if (!candles15m || candles15m.length < 20) return null;
+    if (!candles5m || candles5m.length < 25) return null;
+    if (!candles15m || candles15m.length < 15) return null;
 
-    // RULE 1: Work exclusively with confirmed closed candles to eliminate in-flight traps
+    // Use confirmed closed candles to eliminate in-flight traps
     const closedCandles5m = candles5m.slice(0, -1);
     const lastClosedCandle = closedCandles5m[closedCandles5m.length - 1];
     const closedPrice = lastClosedCandle.close;
     const currentLivePrice = candles5m[candles5m.length - 1].close;
     const closedCloses5m = closedCandles5m.map((c) => c.close);
 
-    // RULE 2: BTC Market Regime Circuit Breaker
+    // 1. BTC Dump Guard: Only halt if BTC is having an active steep drop
     if (
-      (btcContext.change5m || 0) < -0.35 ||
-      (btcContext.change15m || 0) < -0.7
+      (btcContext.change5m || 0) < -0.8 ||
+      (btcContext.change15m || 0) < -1.5
     ) {
-      return null; // BTC is flushing; reject all long setups
+      return null;
     }
 
-    // RULE 3: Multi-Timeframe Exhaustion Filter (15m & 1h)
+    // 2. Higher Timeframe Alignment (15m & 1h)
     const closedCloses15m = candles15m.slice(0, -1).map((c) => c.close);
     const rsi15m = calculateRSI(closedCloses15m, 14);
     const ema9_15m = calculateEMA(closedCloses15m, 9) || closedPrice;
     const ema21_15m = calculateEMA(closedCloses15m, 21) || closedPrice;
 
-    if (rsi15m > 68) return null; // 15m momentum exhausted
-    if (closedCloses15m[closedCloses15m.length - 1] < ema21_15m) {
-      return null; // Under 15m baseline support
+    if (rsi15m > 74) return null; // 15m overbought ceiling
+    if (closedCloses15m[closedCloses15m.length - 1] < ema21_15m * 0.995) {
+      return null; // Clearly lost 15m baseline
     }
 
     if (candles1h && candles1h.length >= 15) {
       const closedCloses1h = candles1h.slice(0, -1).map((c) => c.close);
       const rsi1h = calculateRSI(closedCloses1h, 14);
-      if (rsi1h > 75) return null; // Multi-hour blow-off top
+      if (rsi1h > 78) return null; // 1h blow-off top
     }
 
-    // RULE 4: Single-Candle Pump & Upper Wick Rejection
+    // 3. Upper Wick Dump Filter (relaxed to 38% wick allowance)
     const candleRange = lastClosedCandle.high - lastClosedCandle.low;
     if (candleRange > 0) {
       const upperWick =
@@ -599,23 +589,23 @@ async function evaluateCryptoCandidate(
         Math.max(lastClosedCandle.open, lastClosedCandle.close);
       const upperWickPct = (upperWick / candleRange) * 100;
       if (
-        upperWickPct > 30 &&
-        lastClosedCandle.close < lastClosedCandle.high - candleRange * 0.35
+        upperWickPct > 38 &&
+        lastClosedCandle.close < lastClosedCandle.high - candleRange * 0.4
       ) {
-        return null; // Seller rejection / shooting star
+        return null; // Shooting star / seller absorption
       }
     }
 
-    // Indicators on closed candles
+    // 4. Indicator limits on closed 5m chart
     const rsi14 = calculateRSI(closedCloses5m, 14);
-    if (rsi14 > 66 || rsi14 < 48) {
-      return null; // Overbought or losing momentum
+    if (rsi14 > 72 || rsi14 < 45) {
+      return null; // Overbought ceiling (72) or momentum dead (<45)
     }
 
     const vwap = calculateVWAP(closedCandles5m);
     const vwapDistPct = vwap > 0 ? ((closedPrice - vwap) / vwap) * 100 : 0;
-    if (vwapDistPct > 1.8 || vwapDistPct < -0.2) {
-      return null; // Stretched or broken below VWAP
+    if (vwapDistPct > 2.4 || vwapDistPct < -0.5) {
+      return null; // Too extended from VWAP or collapsing beneath
     }
 
     const ema9 = calculateEMA(closedCloses5m, 9) || closedPrice;
@@ -625,25 +615,26 @@ async function evaluateCryptoCandidate(
       closedPrice;
     const emaDistPct = ((closedPrice - ema9) / ema9) * 100;
 
-    if (emaDistPct > 1.2) {
-      return null; // Rubber-band stretched away from EMA9
+    if (emaDistPct > 1.8) {
+      return null; // Extended beyond normal entry zone
     }
 
-    if (!(closedPrice > ema9 && ema9 > ema20 && ema20 >= ema50)) {
-      return null; // Failed EMA stack structure
+    // Soft trend alignment: price above EMA20 and EMA9 >= EMA20
+    if (!(closedPrice >= ema20 && ema9 >= ema20 * 0.998)) {
+      return null;
     }
 
-    // RULE 5: Sustained Structure Confirmation
+    // 5. Structural momentum confirmation
     const structureCheck = validateMomentumStructure(closedCandles5m, ema9);
     if (!structureCheck.passed) {
-      return null; // Rejects single-candle spike traps and heavy distribution
+      return null;
     }
 
     // ========================================================================
     // FACTOR SCORING
     // ========================================================================
     let candleHealthScore =
-      lastClosedCandle.close > lastClosedCandle.open ? 85 : 45;
+      lastClosedCandle.close >= lastClosedCandle.open ? 80 : 50;
 
     const lastVol = lastClosedCandle.volume;
     const avgVol20 =
@@ -651,15 +642,15 @@ async function evaluateCryptoCandidate(
     const volumeRatio = avgVol20 > 0 ? lastVol / avgVol20 : 1;
 
     let volumeScore = 50;
-    if (volumeRatio >= 1.2 && volumeRatio <= 3.0) {
-      volumeScore = 95;
-    } else if (volumeRatio > 3.0) {
-      volumeScore = 40;
+    if (volumeRatio >= 1.1 && volumeRatio <= 3.2) {
+      volumeScore = 90;
+    } else if (volumeRatio > 3.2) {
+      volumeScore = 55;
     }
 
-    let trendScore = emaDistPct >= 0.05 && emaDistPct <= 0.6 ? 100 : 70;
-    let rsiScore = rsi14 >= 52 && rsi14 <= 62 ? 100 : 65;
-    let htfScore = ema9_15m > ema21_15m ? 95 : 40;
+    let trendScore = emaDistPct >= 0.0 && emaDistPct <= 0.9 ? 95 : 70;
+    let rsiScore = rsi14 >= 50 && rsi14 <= 66 ? 95 : 65;
+    let htfScore = ema9_15m > ema21_15m ? 90 : 50;
 
     const btc15m = btcContext.change15m || 0;
     const token15m =
@@ -667,34 +658,36 @@ async function evaluateCryptoCandidate(
         closedCloses5m[closedCloses5m.length - 4]) *
       100;
     const rsBTC = token15m - btc15m;
-    const rsScore = Math.min(Math.max(50 + rsBTC * 15, 0), 100);
+    const rsScore = Math.min(Math.max(50 + rsBTC * 12, 0), 100);
 
     const derivs = await fetchDerivativesData(symbol).catch(() => ({}));
     const derivativesScore = derivs?.available
-      ? derivs.fundingRate <= 0.0003 && (derivs.oiDelta || 0) >= 0
-        ? 90
-        : 45
+      ? derivs.fundingRate <= 0.0004 && (derivs.oiDelta || 0) >= 0
+        ? 85
+        : 55
       : 70;
 
     const rawScore =
-      candleHealthScore * 0.2 +
+      candleHealthScore * 0.18 +
       volumeScore * 0.18 +
       trendScore * 0.18 +
       rsiScore * 0.14 +
       htfScore * 0.12 +
-      (rsScore * 0.5 + derivativesScore * 0.5) * 0.18;
+      (rsScore * 0.5 + derivativesScore * 0.5) * 0.2;
 
     const finalScore = Math.min(Math.max(Math.round(rawScore), 0), 100);
-    if (finalScore < 76) return null; // Drop subpar candidates
+
+    // Balanced cutoff: relaxed to 65 to ensure high-quality setups pass through
+    if (finalScore < 65) return null;
 
     const atr = calculateATR(closedCandles5m, 14);
     const atrPct = (atr / closedPrice) * 100;
-    const targetPct = Math.min(Math.max(atrPct * 1.8, 1.2), 2.2);
-    const stopLossPct = Math.min(Math.max(atrPct * 1.0, 0.6), 1.0);
+    const targetPct = Math.min(Math.max(atrPct * 2.0, 1.3), 2.5);
+    const stopLossPct = Math.min(Math.max(atrPct * 1.1, 0.7), 1.2);
 
     return {
       symbol,
-      signal: "STRONG BUY CANDIDATE",
+      signal: finalScore >= 75 ? "STRONG BUY CANDIDATE" : "BUY CANDIDATE",
       side: "buy",
       confidence: `${finalScore}%`,
       currentRank: 1,
@@ -716,8 +709,8 @@ async function evaluateCryptoCandidate(
         estimatedMinutes: 45,
       },
       reasons: [
-        "Sustained 40m accumulation held above 5m EMA9",
-        `Controlled RSI runway (${Math.round(rsi14)}) with 15m alignment`,
+        "Confirmed closed candle structure above 5m support",
+        `RSI at healthy continuation levels (${Math.round(rsi14)})`,
         `Outperforming BTC benchmark by +${rsBTC.toFixed(1)}%`,
       ],
       raw: {
@@ -752,10 +745,11 @@ export async function buildCryptoRecommendations(cryptoScans = []) {
 
   let finalPicks = evaluated.slice(0, 3);
   try {
-    const aiPicks = await filterWithAI(evaluated.slice(0, 5), {
-      isCrypto: true,
-      btcChange: btcContext.change24h,
-    });
+    // const aiPicks = await filterWithAI(evaluated.slice(0, 5), {
+    //   isCrypto: true,
+    //   btcChange: btcContext.change24h,
+    // });
+    const aiPicks = [];
     if (aiPicks && aiPicks.length > 0) {
       finalPicks = mergeAIPicks(evaluated, aiPicks);
     }
