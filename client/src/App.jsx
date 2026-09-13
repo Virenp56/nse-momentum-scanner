@@ -44,11 +44,19 @@ const currentIstHourMinute = () =>
     hour12: false,
   }).format(new Date());
 
+const isWeekendIST = () => {
+  const istDate = new Date(
+    new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' })
+  );
+  const day = istDate.getDay();
+  return day === 0 || day === 6; // 0 = Sunday, 6 = Saturday
+};
+
 function getActiveScanTimes(overrideMarket) {
   if (overrideMarket === 'crypto') return CRYPTO_SCAN_TIMES;
   if (overrideMarket === 'nse') return NSE_SCAN_TIMES;
   
-  // Auto-detect based on IST time (>= 18:00 is Crypto Evening Session)
+  if (isWeekendIST()) return CRYPTO_SCAN_TIMES;
   const current = currentIstHourMinute();
   return current >= "18:00" ? CRYPTO_SCAN_TIMES : NSE_SCAN_TIMES;
 }
@@ -66,7 +74,9 @@ export default function App() {
   const [scanStatus, setScanStatus] = useState('');
   const [error, setError] = useState('');
   const [time, setTime] = useState(clock());
-  const [activeMarket, setActiveMarket] = useState(currentIstHourMinute() >= "18:00" ? 'crypto' : 'nse');
+  const [activeMarket, setActiveMarket] = useState(
+    isWeekendIST() || currentIstHourMinute() >= "18:00" ? 'crypto' : 'nse'
+  );
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -98,10 +108,14 @@ export default function App() {
 
   const manualScan = async () => {
     setBusy(true);
-    setScanStatus(activeMarket === 'crypto' ? 'Fetching Binance Crypto Data…' : 'Fetching live NSE market data…');
+    setScanStatus(
+      activeMarket === 'crypto'
+        ? 'Fetching Bybit Crypto Market Data…'
+        : 'Fetching live NSE market data…'
+    );
     setError('');
     try {
-      await api.post('/scan');
+      await api.post('/scan', { market: activeMarket });
       setScanStatus('Running technical evaluation & RSI/EMA…');
       await refresh();
     } catch (e) {
@@ -153,7 +167,7 @@ export default function App() {
     <main className="app-shell">
       <header>
         <div>
-          <p className="eyebrow">{activeMarket === 'crypto' ? 'BINANCE CRYPTO MOMENTUM' : 'PERSONAL MARKET RESEARCH'}</p>
+          <p className="eyebrow">{activeMarket === 'crypto' ? 'BYBIT CRYPTO MOMENTUM' : 'PERSONAL MARKET RESEARCH'}</p>
           <h1>{activeMarket === 'crypto' ? 'Crypto Momentum ' : 'NSE Momentum '}<em>Scanner</em></h1>
         </div>
         <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
@@ -303,13 +317,11 @@ function StrategyGuide({ activeMarket }) {
   );
 }
 
-
 function Dashboard({ day, recommendations, time, next, activeSchedule, activeMarket }) {
   const scanCount = activeSchedule.filter((scheduledTime) =>
     day?.scans?.some((scan) => scan.time === scheduledTime)
   ).length;
 
-  // Support both new 'topPicks' and legacy 'foTop3' structure safely
   const picks = Array.isArray(recommendations?.topPicks)
     ? recommendations.topPicks.slice(0, 3)
     : Array.isArray(recommendations?.foTop3)
@@ -365,7 +377,7 @@ function Dashboard({ day, recommendations, time, next, activeSchedule, activeMar
         <div className="section-heading">
           <div>
             <h2>{title}</h2>
-            <span>{activeMarket === 'crypto' ? 'High-volume crypto momentum breakouts' : 'Filtered by AI & Quantitative Rules'}</span>
+            <span>{activeMarket === 'crypto' ? 'High-volume crypto momentum breakouts' : 'Filtered by Quantitative Rules'}</span>
           </div>
           <span className="tag fo-tag">{tag}</span>
         </div>

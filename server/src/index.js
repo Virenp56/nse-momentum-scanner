@@ -58,21 +58,40 @@ const indiaTime = () =>
     hour12: false,
   }).format(new Date());
 
-function isCryptoSession(time) {
-  return time >= "18:00"; // Scans after 6:00 PM are treated as Crypto
+function isWeekendIST() {
+  const istDate = new Date(
+    new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" })
+  );
+  const day = istDate.getDay();
+  return day === 0 || day === 6; // 0 = Sunday, 6 = Saturday
 }
 
-async function runScan(forcedTime) {
+function isCryptoSession(time, marketOverride) {
+  // If explicitly provided via manual scan, follow it
+  if (marketOverride) {
+    return marketOverride.toUpperCase() === "CRYPTO";
+  }
+  // NSE is closed on weekends; default all weekend scans to Crypto
+  if (isWeekendIST()) {
+    return true;
+  }
+  // On weekdays, scans after 18:00 IST run as Crypto
+  return time >= "18:00";
+}
+
+async function runScan(forcedTime, marketOverride) {
   if (scanning) throw new Error("A scan is already in progress.");
   scanning = true;
   try {
     const time = forcedTime || indiaTime();
     const day = await getToday();
-    if (day.scans.some((scan) => scan.time === time)) return day;
+
+    // Replace previous scan for the same minute to allow manual re-scanning
+    day.scans = day.scans.filter((scan) => scan.time !== time);
 
     let gainers, losers, marketType;
 
-    if (isCryptoSession(time)) {
+    if (isCryptoSession(time, marketOverride)) {
       marketType = "CRYPTO";
       const cryptoData = await fetchCryptoGainersLosers();
       gainers = cryptoData.gainers;
@@ -127,7 +146,9 @@ app.get("/api/health", (_, res) => res.json({ ok: true }));
 
 app.post("/api/scan", async (req, res, next) => {
   try {
-    res.json(await runScan(req.body?.time));
+    const forcedTime = req.body?.time;
+    const market = req.body?.market || req.body?.type;
+    res.json(await runScan(forcedTime, market));
   } catch (e) {
     next(e);
   }
@@ -158,11 +179,9 @@ app.delete("/api/today", async (_, res, next) => {
   }
 });
 
-// Add this route in src/index.js
 app.get("/api/test-crypto", async (_, res, next) => {
   try {
-    // Pass an evening time string (e.g. 20:00) to trigger crypto branch
-    const result = await runScan("20:00");
+    const result = await runScan("20:00", "CRYPTO");
     res.json({ message: "Crypto scan successful!", data: result });
   } catch (err) {
     next(err);
