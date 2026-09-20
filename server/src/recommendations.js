@@ -32,7 +32,7 @@ function calculateRSI(closes, period = 14) {
       avgLoss = (avgLoss * (period - 1)) / period;
     } else {
       avgGain = (avgGain * (period - 1)) / period;
-      avgLoss = (avgLoss * (period - 1) - diff) / period;
+      avgLoss = (avgLoss * (period - 1)) / period;
     }
   }
 
@@ -67,23 +67,6 @@ function calculateATR(candles, period = 14) {
   return slice.reduce((a, b) => a + b, 0) / slice.length;
 }
 
-function calculateMACD(closes) {
-  if (!closes || closes.length < 26) {
-    return { macd: 0, signal: 0, histogram: 0, bullishCross: false };
-  }
-  const ema12 = calculateEMA(closes, 12) || 0;
-  const ema26 = calculateEMA(closes, 26) || 0;
-  const macdVal = ema12 - ema26;
-  const signalVal = macdVal * 0.9;
-  const histogram = macdVal - signalVal;
-  return {
-    macd: macdVal,
-    signal: signalVal,
-    histogram,
-    bullishCross: histogram > 0,
-  };
-}
-
 function calculateVWAP(candles) {
   if (!candles || candles.length === 0) return 0;
   const cumPV = candles.reduce(
@@ -94,59 +77,68 @@ function calculateVWAP(candles) {
   return cumVol > 0 ? cumPV / cumVol : candles[candles.length - 1].close;
 }
 
-// ============================================================================
-// BALANCED CRYPTO STRUCTURE CONFIRMATION & ANTI-TRAP VALIDATION
-// ============================================================================
+// Aggregates raw 1-minute NSE chart data into 5-minute candles
+function resampleTo5mCandles(raw1mCandles) {
+  if (!Array.isArray(raw1mCandles) || raw1mCandles.length === 0) return [];
 
-function validateCryptoStructure(closedCandles, ema9) {
-  if (!closedCandles || closedCandles.length < 15) return { passed: false };
+  const candles5m = [];
+  const chunkSize = 5;
 
-  const lookback = closedCandles.slice(-8);
-  const latestClosed = lookback[lookback.length - 1];
+  for (let i = 0; i < raw1mCandles.length; i += chunkSize) {
+    const chunk = raw1mCandles.slice(i, i + chunkSize);
+    if (chunk.length === 0) continue;
 
-  // 1. Dynamic impulse check (calibrated for weekend liquidity: 0.18% min gain)
-  const windowOpen = lookback[0].open;
-  const highestHigh = Math.max(...lookback.map((c) => c.high));
-  const netGainPct = ((latestClosed.close - windowOpen) / windowOpen) * 100;
-  if (netGainPct < 0.18) {
-    return { passed: false, reason: "Insufficient directional impulse" };
+    const open = chunk[0][1];
+    const high = Math.max(...chunk.map((c) => c[2]));
+    const low = Math.min(...chunk.map((c) => c[3]));
+    const close = chunk[chunk.length - 1][4];
+    const volume = chunk.reduce((sum, c) => sum + (c[5] || 0), 0);
+
+    candles5m.push({ open, high, low, close, volume });
   }
 
-  // 2. Reject deep dumps: token cannot lose >65% of its recent breakout expansion
-  const totalRange = highestHigh - windowOpen;
-  const retrace = highestHigh - latestClosed.close;
-  if (totalRange > 0 && retrace / totalRange > 0.65) {
-    return { passed: false, reason: "Excessive dump from local peak" };
+  return candles5m;
+}
+
+// Intraday Structure & Exhaustion Trap Guard for 10:00 - 10:30 entries
+function validateIntradayStructure(candles5m, vwap, ltp) {
+  if (!candles5m || candles5m.length < 6) {
+    return { passed: true, isOrbBreakout: false };
   }
 
-  // 3. Distribution volume check: avoid traps where red volume swamps green volume
-  const greenVol = lookback
-    .filter((c) => c.close >= c.open)
-    .map((c) => c.volume);
-  const redVol = lookback.filter((c) => c.close < c.open).map((c) => c.volume);
+  // 09:15 - 09:45 AM (First 6 five-minute bars) establish opening range
+  const orbCandles = candles5m.slice(0, 6);
+  const openingRangeHigh = Math.max(...orbCandles.map((c) => c.high));
 
-  const avgGreenVol = greenVol.length
-    ? greenVol.reduce((a, b) => a + b, 0) / greenVol.length
-    : 0;
-  const avgRedVol = redVol.length
-    ? redVol.reduce((a, b) => a + b, 0) / redVol.length
-    : 0;
+  const lastClosed = candles5m[candles5m.length - 1];
+  const candleRange = lastClosed.high - lastClosed.low;
 
-  if (avgRedVol > avgGreenVol * 2.0 && avgRedVol > 0) {
-    return { passed: false, reason: "Severe distribution volume" };
+  // 1. Trap Filter: Reject shooting-star candles dumping near high
+  if (candleRange > 0) {
+    const upperWick =
+      lastClosed.high - Math.max(lastClosed.open, lastClosed.close);
+    if (
+      upperWick / candleRange > 0.4 &&
+      lastClosed.close < lastClosed.high - candleRange * 0.4
+    ) {
+      return { passed: false, reason: "Upper-wick rejection at morning high" };
+    }
   }
 
-  // 4. Moving average baseline: price must be within structural reach of EMA9
-  const distFromEma9 = ((latestClosed.close - ema9) / ema9) * 100;
-  if (distFromEma9 < -1.2 || distFromEma9 > 2.2) {
-    return { passed: false, reason: "Too far from moving average support" };
+  // 2. Reject overextension: stock trading > 1.8% above VWAP during 10:00-10:30 mean-reversion
+  const vwapDistPct = vwap > 0 ? ((ltp - vwap) / vwap) * 100 : 0;
+  if (vwapDistPct > 1.8) {
+    return { passed: false, reason: "Overextended from VWAP (>1.8%)" };
   }
 
-  return { passed: true, netGainPct, distFromEma9 };
+  // 3. Opening Range Breakout / Sustained high confirmation
+  const isOrbBreakout = ltp >= openingRangeHigh * 0.998;
+
+  return { passed: true, isOrbBreakout, openingRangeHigh };
 }
 
 // ============================================================================
-// NSE EQUITIES 10-FACTOR EVALUATION ENGINE (ENTIRELY UNTOUCHED)
+// NSE EQUITIES MULTI-FACTOR EVALUATION ENGINE (WITHOUT REQUIRING AI)
 // ============================================================================
 
 async function evaluateCandidate(candidate, scansData, totalScans, indexMap) {
@@ -257,7 +249,7 @@ async function evaluateCandidate(candidate, scansData, totalScans, indexMap) {
       totalTradedVolume: candidate.volume || 100000,
     };
 
-    const secInfo = quotePayload?.secInfo || { pdSectorInd: "NIFTY IT" };
+    const secInfo = quotePayload?.secInfo || { pdSectorInd: "NIFTY 50" };
 
     const lastPrice =
       meta?.closePrice || tradeInfo?.lastPrice || candidate.lastPrice || 0;
@@ -269,20 +261,26 @@ async function evaluateCandidate(candidate, scansData, totalScans, indexMap) {
     const totalTradedQty =
       tradeInfo?.totalTradedVolume || candidate.volume || 0;
 
+    // Reject stocks below VWAP or trading with poor delivery
+    if (lastPrice <= vwap || vwap <= 0) return null;
+    if (delPct > 0 && delPct < 22) return null;
+
+    // VWAP Score: optimal intraday buy point is a low pullback near VWAP (0.2% - 1.1%)
+    const vwapDistancePct = ((lastPrice - vwap) / vwap) * 100;
     let vwapScore = 0;
-    if (lastPrice > 0 && vwap > 0) {
-      const vwapDistancePct = ((lastPrice - vwap) / vwap) * 100;
-      if (vwapDistancePct < 0) vwapScore = 0;
-      else if (vwapDistancePct <= 2.5) vwapScore = 100;
-      else vwapScore = Math.max(100 - (vwapDistancePct - 2.5) * 20, 30);
+    if (vwapDistancePct >= 0.15 && vwapDistancePct <= 1.1) {
+      vwapScore = 100;
+    } else if (vwapDistancePct > 1.1 && vwapDistancePct <= 1.6) {
+      vwapScore = 75;
+    } else {
+      vwapScore = 30;
     }
 
     let nearHighScore = 50;
     if (dayHigh > dayLow && dayHigh > 0) {
-      nearHighScore = Math.min(
-        Math.max(((lastPrice - dayLow) / (dayHigh - dayLow)) * 100, 0),
-        100
-      );
+      const highDist = (lastPrice - dayLow) / (dayHigh - dayLow);
+      // Favour healthy consolidation within 80%-95% of high rather than pin high
+      nearHighScore = highDist >= 0.75 && highDist <= 0.96 ? 95 : 60;
     }
 
     const niftyPChange = indexMap.get("NIFTY 50") || 0;
@@ -307,36 +305,47 @@ async function evaluateCandidate(candidate, scansData, totalScans, indexMap) {
       100
     );
 
+    // Multi-Timeframe 5M Check & Anti-Trap Verification
     let technicalScore = 50;
     let rsiValue = 50;
     let isEmaBullish = false;
+    let isOrbBreakout = false;
 
     if (
       chartData &&
       Array.isArray(chartData.data) &&
-      chartData.data.length > 14
+      chartData.data.length >= 10
     ) {
-      const closes = chartData.data.map((c) => c[4]);
-      rsiValue = Math.round(calculateRSI(closes));
+      const candles5m = resampleTo5mCandles(chartData.data);
+      const closes5m = candles5m.map((c) => c.close);
 
-      let rsiPart =
-        rsiValue >= 55 && rsiValue <= 75 ? 100 : rsiValue > 75 ? 60 : 30;
+      const structure = validateIntradayStructure(candles5m, vwap, lastPrice);
+      if (!structure.passed) return null; // Reject exhaustion candles immediately
 
-      const ema9 = calculateEMA(closes, 9);
-      const ema20 = calculateEMA(closes, 20);
-      const latestClose = closes[closes.length - 1];
+      isOrbBreakout = structure.isOrbBreakout;
+      rsiValue = Math.round(calculateRSI(closes5m));
+
+      // Strictly penalize overbought or decaying RSI
+      let rsiPart = 30;
+      if (rsiValue >= 52 && rsiValue <= 68) rsiPart = 100;
+      else if (rsiValue > 68 && rsiValue <= 74) rsiPart = 55;
+
+      const ema9 = calculateEMA(closes5m, 9);
+      const ema20 = calculateEMA(closes5m, 20);
+      const latestClose = closes5m[closes5m.length - 1];
 
       let emaPart = 50;
-      if (ema9 && ema20 && latestClose > ema9 && ema9 > ema20) {
+      if (ema9 && ema20 && latestClose >= ema9 && ema9 > ema20) {
         emaPart = 100;
         isEmaBullish = true;
-      } else if (latestClose > ema20) {
-        emaPart = 70;
+      } else if (ema20 && latestClose >= ema20) {
+        emaPart = 65;
       } else {
         emaPart = 20;
       }
 
       technicalScore = (rsiPart + emaPart) / 2;
+      if (isOrbBreakout) technicalScore = Math.min(technicalScore + 10, 100);
     }
 
     let baseScore =
@@ -354,29 +363,35 @@ async function evaluateCandidate(candidate, scansData, totalScans, indexMap) {
     const minTradedQty = 250000;
     const liquidityPenalty =
       totalTradedQty > 0 && totalTradedQty < minTradedQty ? 0.85 : 1.0;
-    const finalScore = baseScore * liquidityPenalty;
+    const finalScore = Math.round(baseScore * liquidityPenalty);
 
-    const confidenceScore = `${Math.round(finalScore)}%`;
-    const signalText = finalScore >= 70 ? "STRONG BUY" : "BUY";
+    // Reject weak setups
+    if (finalScore < 60) return null;
+
+    const confidenceScore = `${finalScore}%`;
+    const signalText = finalScore >= 72 ? "STRONG BUY" : "BUY";
 
     const reasons = [];
-    reasons.push(
-      `Appeared in ${appearances}/${totalScans} scans (${currentStreak} streak)`
+    if (isOrbBreakout)
+      reasons.push("Sustaining above Opening Range (09:15-09:45)");
+    if (vwapDistancePct >= 0.15 && vwapDistancePct <= 1.2) {
+      reasons.push(`Clean bounce off VWAP support (₹${vwap.toFixed(1)})`);
+    }
+    if (isEmaBullish) reasons.push("5m Trend aligned (Price >= EMA9 > EMA20)");
+    if (rsiValue >= 52 && rsiValue <= 68) {
+      reasons.push(`Healthy continuation RSI (${rsiValue})`);
+    }
+    if (rsNiftyDelta > 1.0) {
+      reasons.push(`Outperforming NIFTY by +${rsNiftyDelta.toFixed(1)}%`);
+    }
+
+    // Exact Intraday Risk-to-Reward levels (Target +1.0%, Stop Loss -0.5%)
+    const targetPct = 1.0;
+    const stopLossPct = 0.5;
+    const targetPrice = Number((lastPrice * (1 + targetPct / 100)).toFixed(2));
+    const stopLossPrice = Number(
+      (lastPrice * (1 - stopLossPct / 100)).toFixed(2)
     );
-    if (lastPrice > vwap && vwap > 0)
-      reasons.push(`Trading above VWAP (₹${vwap.toFixed(1)})`);
-    if (isEmaBullish)
-      reasons.push(`Bullish EMA alignment (Price > EMA9 > EMA20)`);
-    if (rsiValue >= 55 && rsiValue <= 75)
-      reasons.push(`RSI momentum in optimal zone (${rsiValue})`);
-    if (rsSectorDelta > 0)
-      reasons.push(
-        `Outperforming ${sectorName || "Sector"} by +${rsSectorDelta.toFixed(
-          1
-        )}%`
-      );
-    if (delPct > 35)
-      reasons.push(`High institutional delivery volume (${delPct}%)`);
 
     return {
       symbol,
@@ -389,6 +404,14 @@ async function evaluateCandidate(candidate, scansData, totalScans, indexMap) {
       rankTrend: rankHistory.length > 0 ? rankHistory : [1],
       changeTrend: changeTrend.length > 0 ? changeTrend : [stockPChange],
       reasons: reasons.slice(0, 3),
+      entry: lastPrice,
+      trade: {
+        targetPrice,
+        targetPct,
+        stopLossPrice,
+        stopLossPct,
+        riskReward: "1:2",
+      },
       raw: { ltp: lastPrice, vwap, dayHigh, deliveryPct: delPct },
       score: finalScore,
       rsiValue,
@@ -513,7 +536,16 @@ export async function buildRecommendations(scans = []) {
       .filter((item) => item && item.score > 0)
       .sort((a, b) => b.score - a.score);
 
-    const aiFoPicks = [];
+    // AI is purely an optional enhancement. If API key is missing or fails, it falls back to evaluatedFo
+    let aiFoPicks = [];
+    try {
+      aiFoPicks = await filterWithAI(evaluatedFo.slice(0, 5), {
+        niftyPChange: marketContext.niftyPChange,
+        isCrypto: false,
+      });
+    } catch {
+      aiFoPicks = [];
+    }
 
     return {
       topPicks: mergeAIPicks(evaluatedFo, aiFoPicks),
@@ -528,6 +560,49 @@ export async function buildRecommendations(scans = []) {
 // BALANCED CRYPTO 5M/15M ENGINE WITH ANTI-TRAP & FAKEOUT ELIMINATION
 // ============================================================================
 
+function validateCryptoStructure(closedCandles, ema9) {
+  if (!closedCandles || closedCandles.length < 15) return { passed: false };
+
+  const lookback = closedCandles.slice(-8);
+  const latestClosed = lookback[lookback.length - 1];
+
+  const windowOpen = lookback[0].open;
+  const highestHigh = Math.max(...lookback.map((c) => c.high));
+  const netGainPct = ((latestClosed.close - windowOpen) / windowOpen) * 100;
+  if (netGainPct < 0.18) {
+    return { passed: false, reason: "Insufficient directional impulse" };
+  }
+
+  const totalRange = highestHigh - windowOpen;
+  const retrace = highestHigh - latestClosed.close;
+  if (totalRange > 0 && retrace / totalRange > 0.65) {
+    return { passed: false, reason: "Excessive dump from local peak" };
+  }
+
+  const greenVol = lookback
+    .filter((c) => c.close >= c.open)
+    .map((c) => c.volume);
+  const redVol = lookback.filter((c) => c.close < c.open).map((c) => c.volume);
+
+  const avgGreenVol = greenVol.length
+    ? greenVol.reduce((a, b) => a + b, 0) / greenVol.length
+    : 0;
+  const avgRedVol = redVol.length
+    ? redVol.reduce((a, b) => a + b, 0) / redVol.length
+    : 0;
+
+  if (avgRedVol > avgGreenVol * 2.0 && avgRedVol > 0) {
+    return { passed: false, reason: "Severe distribution volume" };
+  }
+
+  const distFromEma9 = ((latestClosed.close - ema9) / ema9) * 100;
+  if (distFromEma9 < -1.2 || distFromEma9 > 2.2) {
+    return { passed: false, reason: "Too far from moving average support" };
+  }
+
+  return { passed: true, netGainPct, distFromEma9 };
+}
+
 async function evaluateCryptoCandidate(
   candidate,
   cryptoScans = [],
@@ -536,10 +611,9 @@ async function evaluateCryptoCandidate(
   const symbol = candidate.symbol;
 
   try {
-    const [candles5m, candles15m, candles1h] = await Promise.all([
+    const [candles5m, candles15m] = await Promise.all([
       fetchCryptoKlines(symbol, "5", 60),
       fetchCryptoKlines(symbol, "15", 40),
-      fetchCryptoKlines(symbol, "60", 24),
     ]);
 
     if (!candles5m || candles5m.length < 25) return null;
@@ -551,7 +625,6 @@ async function evaluateCryptoCandidate(
     const currentLivePrice = candles5m[candles5m.length - 1].close;
     const closedCloses5m = closedCandles5m.map((c) => c.close);
 
-    // 1. Benchmark Dump Guard: halt alts if BTC is currently dumping
     if (
       (btcContext.change5m || 0) < -0.8 ||
       (btcContext.change15m || 0) < -1.5
@@ -559,14 +632,12 @@ async function evaluateCryptoCandidate(
       return null;
     }
 
-    // 2. Anti-Trap Upper Wick Rejection: Catch shooting stars before they dump
     const candleRange5m = lastClosedCandle.high - lastClosedCandle.low;
     if (candleRange5m > 0) {
       const upperWick5m =
         lastClosedCandle.high -
         Math.max(lastClosedCandle.open, lastClosedCandle.close);
       const upperWickPct = (upperWick5m / candleRange5m) * 100;
-      // Rejects tokens that left >46% upper wick and closed back down in the lower 50%
       if (
         upperWickPct > 46 &&
         lastClosedCandle.close < lastClosedCandle.high - candleRange5m * 0.45
@@ -575,62 +646,41 @@ async function evaluateCryptoCandidate(
       }
     }
 
-    // 3. Higher Timeframe Alignment (15m Baseline)
     const closedCloses15m = candles15m.slice(0, -1).map((c) => c.close);
     const rsi15m = calculateRSI(closedCloses15m, 14);
-    const ema9_15m = calculateEMA(closedCloses15m, 9) || closedPrice;
     const ema21_15m = calculateEMA(closedCloses15m, 21) || closedPrice;
 
-    if (rsi15m > 74) return null; // 15m overbought
+    if (rsi15m > 74) return null;
     if (closedCloses15m[closedCloses15m.length - 1] < ema21_15m * 0.993) {
-      return null; // Lost 15m structural baseline
-    }
-
-    // 4. Indicator limits on 5m chart
-    const rsi14 = calculateRSI(closedCloses5m, 14);
-    if (rsi14 > 72 || rsi14 < 45) {
       return null;
     }
+
+    const rsi14 = calculateRSI(closedCloses5m, 14);
+    if (rsi14 > 72 || rsi14 < 45) return null;
 
     const vwap = calculateVWAP(closedCandles5m);
     const vwapDistPct = vwap > 0 ? ((closedPrice - vwap) / vwap) * 100 : 0;
-    if (vwapDistPct > 2.5 || vwapDistPct < -0.8) {
-      return null;
-    }
+    if (vwapDistPct > 2.5 || vwapDistPct < -0.8) return null;
 
     const ema9 = calculateEMA(closedCloses5m, 9) || closedPrice;
     const ema20 = calculateEMA(closedCloses5m, 20) || closedPrice;
     const emaDistPct = ((closedPrice - ema9) / ema9) * 100;
 
-    // Overextension Trap Guard: do not enter if price is extended >1.9% above EMA9
-    if (emaDistPct > 1.9) {
-      return null;
-    }
+    if (emaDistPct > 1.9) return null;
+    if (!(closedPrice >= ema20 * 0.998 && ema9 >= ema20 * 0.995)) return null;
 
-    // Trend alignment: price above EMA20 and EMA9 near or above EMA20
-    if (!(closedPrice >= ema20 * 0.998 && ema9 >= ema20 * 0.995)) {
-      return null;
-    }
-
-    // 5. Structural momentum confirmation
     const structureCheck = validateCryptoStructure(closedCandles5m, ema9);
-    if (!structureCheck.passed) {
-      return null;
-    }
+    if (!structureCheck.passed) return null;
 
-    // 6. Open Interest & Funding Trap Divergence (Derivative Protection)
     const derivs = await fetchDerivativesData(symbol).catch(() => ({}));
     if (
       derivs?.available &&
       derivs.oiDelta < -3.0 &&
       candidate.priceChangePercent > 5.0
     ) {
-      return null; // Short-squeeze trap that routinely dumps back down
+      return null;
     }
 
-    // ========================================================================
-    // FACTOR SCORING
-    // ========================================================================
     let candleHealthScore =
       lastClosedCandle.close >= lastClosedCandle.open ? 85 : 55;
 
@@ -640,15 +690,11 @@ async function evaluateCryptoCandidate(
     const volumeRatio = avgVol20 > 0 ? lastVol / avgVol20 : 1;
 
     let volumeScore = 55;
-    if (volumeRatio >= 1.1 && volumeRatio <= 3.2) {
-      volumeScore = 90;
-    } else if (volumeRatio > 3.2) {
-      volumeScore = 60;
-    }
+    if (volumeRatio >= 1.1 && volumeRatio <= 3.2) volumeScore = 90;
+    else if (volumeRatio > 3.2) volumeScore = 60;
 
     let trendScore = emaDistPct >= 0.0 && emaDistPct <= 1.0 ? 95 : 70;
     let rsiScore = rsi14 >= 50 && rsi14 <= 66 ? 95 : 65;
-    let htfScore = ema9_15m > ema21_15m ? 90 : 55;
 
     const btc15m = btcContext.change15m || 0;
     const token15m =
@@ -669,12 +715,10 @@ async function evaluateCryptoCandidate(
       volumeScore * 0.18 +
       trendScore * 0.18 +
       rsiScore * 0.14 +
-      htfScore * 0.12 +
+      80 * 0.12 +
       (rsScore * 0.5 + derivativesScore * 0.5) * 0.2;
 
     const finalScore = Math.min(Math.max(Math.round(rawScore), 0), 100);
-
-    // Standard high-conviction cutoff
     if (finalScore < 58) return null;
 
     const atr = calculateATR(closedCandles5m, 14);
