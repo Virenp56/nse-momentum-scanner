@@ -115,11 +115,10 @@ function validateIntradayStructure(candles5m, vwap, ltp) {
 
   // 1. Trap Filter: Reject shooting-star candles dumping near high
   if (candleRange > 0) {
-    const upperWick =
-      lastClosed.high - Math.max(lastClosed.open, lastClosed.close);
+    const upperWick = lastClosed.high - Math.max(lastClosed.open, lastClosed.close);
     if (
-      upperWick / candleRange > 0.4 &&
-      lastClosed.close < lastClosed.high - candleRange * 0.4
+      upperWick / candleRange > 0.40 &&
+      lastClosed.close < lastClosed.high - candleRange * 0.40
     ) {
       return { passed: false, reason: "Upper-wick rejection at morning high" };
     }
@@ -261,11 +260,11 @@ async function evaluateCandidate(candidate, scansData, totalScans, indexMap) {
     const totalTradedQty =
       tradeInfo?.totalTradedVolume || candidate.volume || 0;
 
-    // Reject stocks below VWAP or trading with poor delivery
+    // Reject stocks below VWAP or trading with low institutional delivery
     if (lastPrice <= vwap || vwap <= 0) return null;
     if (delPct > 0 && delPct < 22) return null;
 
-    // VWAP Score: optimal intraday buy point is a low pullback near VWAP (0.2% - 1.1%)
+    // VWAP Score: optimal intraday buy point is consolidation near VWAP (0.15% - 1.1%)
     const vwapDistancePct = ((lastPrice - vwap) / vwap) * 100;
     let vwapScore = 0;
     if (vwapDistancePct >= 0.15 && vwapDistancePct <= 1.1) {
@@ -279,7 +278,7 @@ async function evaluateCandidate(candidate, scansData, totalScans, indexMap) {
     let nearHighScore = 50;
     if (dayHigh > dayLow && dayHigh > 0) {
       const highDist = (lastPrice - dayLow) / (dayHigh - dayLow);
-      // Favour healthy consolidation within 80%-95% of high rather than pin high
+      // Favour healthy consolidation within 75%-96% of high rather than pinned at resistance
       nearHighScore = highDist >= 0.75 && highDist <= 0.96 ? 95 : 60;
     }
 
@@ -291,17 +290,11 @@ async function evaluateCandidate(candidate, scansData, totalScans, indexMap) {
     const rsSectorDelta = stockPChange - sectorPChange;
 
     const rsNiftyScore = Math.min(
-      Math.max(
-        rsNiftyDelta >= 0 ? 50 + rsNiftyDelta * 20 : 50 + rsNiftyDelta * 30,
-        0
-      ),
+      Math.max(rsNiftyDelta >= 0 ? 50 + rsNiftyDelta * 20 : 50 + rsNiftyDelta * 30, 0),
       100
     );
     const rsSectorScore = Math.min(
-      Math.max(
-        rsSectorDelta >= 0 ? 50 + rsSectorDelta * 20 : 50 + rsSectorDelta * 30,
-        0
-      ),
+      Math.max(rsSectorDelta >= 0 ? 50 + rsSectorDelta * 20 : 50 + rsSectorDelta * 30, 0),
       100
     );
 
@@ -311,21 +304,16 @@ async function evaluateCandidate(candidate, scansData, totalScans, indexMap) {
     let isEmaBullish = false;
     let isOrbBreakout = false;
 
-    if (
-      chartData &&
-      Array.isArray(chartData.data) &&
-      chartData.data.length >= 10
-    ) {
+    if (chartData && Array.isArray(chartData.data) && chartData.data.length >= 10) {
       const candles5m = resampleTo5mCandles(chartData.data);
       const closes5m = candles5m.map((c) => c.close);
 
       const structure = validateIntradayStructure(candles5m, vwap, lastPrice);
-      if (!structure.passed) return null; // Reject exhaustion candles immediately
+      if (!structure.passed) return null; // Reject exhaustion traps immediately
 
       isOrbBreakout = structure.isOrbBreakout;
       rsiValue = Math.round(calculateRSI(closes5m));
 
-      // Strictly penalize overbought or decaying RSI
       let rsiPart = 30;
       if (rsiValue >= 52 && rsiValue <= 68) rsiPart = 100;
       else if (rsiValue > 68 && rsiValue <= 74) rsiPart = 55;
@@ -365,17 +353,16 @@ async function evaluateCandidate(candidate, scansData, totalScans, indexMap) {
       totalTradedQty > 0 && totalTradedQty < minTradedQty ? 0.85 : 1.0;
     const finalScore = Math.round(baseScore * liquidityPenalty);
 
-    // Reject weak setups
+    // Filter out setups with low conviction
     if (finalScore < 60) return null;
 
     const confidenceScore = `${finalScore}%`;
     const signalText = finalScore >= 72 ? "STRONG BUY" : "BUY";
 
     const reasons = [];
-    if (isOrbBreakout)
-      reasons.push("Sustaining above Opening Range (09:15-09:45)");
+    if (isOrbBreakout) reasons.push("Sustaining above Opening Range (09:15-09:45)");
     if (vwapDistancePct >= 0.15 && vwapDistancePct <= 1.2) {
-      reasons.push(`Clean bounce off VWAP support (₹${vwap.toFixed(1)})`);
+      reasons.push(`Consolidating near VWAP support (₹${vwap.toFixed(1)})`);
     }
     if (isEmaBullish) reasons.push("5m Trend aligned (Price >= EMA9 > EMA20)");
     if (rsiValue >= 52 && rsiValue <= 68) {
@@ -389,17 +376,14 @@ async function evaluateCandidate(candidate, scansData, totalScans, indexMap) {
     const targetPct = 1.0;
     const stopLossPct = 0.5;
     const targetPrice = Number((lastPrice * (1 + targetPct / 100)).toFixed(2));
-    const stopLossPrice = Number(
-      (lastPrice * (1 - stopLossPct / 100)).toFixed(2)
-    );
+    const stopLossPrice = Number((lastPrice * (1 - stopLossPct / 100)).toFixed(2));
 
     return {
       symbol,
       signal: signalText,
       side: "buy",
       confidence: confidenceScore,
-      currentRank:
-        rankHistory.length > 0 ? rankHistory[rankHistory.length - 1] : 1,
+      currentRank: rankHistory.length > 0 ? rankHistory[rankHistory.length - 1] : 1,
       currentChange: stockPChange,
       rankTrend: rankHistory.length > 0 ? rankHistory : [1],
       changeTrend: changeTrend.length > 0 ? changeTrend : [stockPChange],
@@ -433,11 +417,16 @@ function mergeAIPicks(candidates, aiPicks) {
   for (const pick of aiPicks) {
     const original = map.get(pick.symbol);
     if (original) {
+      const confRaw = pick.confidence != null ? String(pick.confidence).trim() : "";
+      const origConf = String(original.confidence || "").trim();
+
+      const confidence = confRaw
+        ? (confRaw.endsWith("%") ? confRaw : `${confRaw}%`)
+        : (origConf.endsWith("%") ? origConf : `${origConf}%`);
+
       merged.push({
         ...original,
-        confidence: pick.confidence?.includes("%")
-          ? pick.confidence
-          : `${pick.confidence || original.confidence}%`,
+        confidence,
         signal: pick.signal || original.signal,
         reasons:
           Array.isArray(pick.aiReasoning) && pick.aiReasoning.length > 0
@@ -536,7 +525,7 @@ export async function buildRecommendations(scans = []) {
       .filter((item) => item && item.score > 0)
       .sort((a, b) => b.score - a.score);
 
-    // AI is purely an optional enhancement. If API key is missing or fails, it falls back to evaluatedFo
+    // AI is optional. If API key is missing or fails, it falls back to evaluatedFo
     let aiFoPicks = [];
     try {
       aiFoPicks = await filterWithAI(evaluatedFo.slice(0, 5), {
